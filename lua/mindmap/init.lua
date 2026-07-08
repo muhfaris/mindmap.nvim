@@ -295,6 +295,9 @@ function M.setup_map_keymaps(map_buf, src_buf)
   -- Yank Map to Clipboard
   map("gy", function(state) M.yank_map(state) end, "Yank/Copy entire mindmap to clipboard")
 
+  -- Help Popup
+  map("?", function() M.show_help() end, "Show help popup")
+
   -- Navigation (adaptive to layout)
   map("k", function(state)
     if state.layout == "horizontal" then
@@ -802,5 +805,78 @@ end
 
 -- Initialize colorscheme-adaptive highlight groups on load
 require("mindmap.render").setup_highlights()
+
+--- Shows floating help window with keybindings.
+function M.show_help()
+  local help_text = {
+    " Mindmap.nvim Help ",
+    " ================= ",
+    " ",
+    " Outline Mode Controls: ",
+    "   gm          Toggle Mindmap View (Outline <-> Map) ",
+    "   gl          Toggle Mindmap Layout (Vertical <-> Horizontal) ",
+    "   ?           Show this help popup ",
+    " ",
+    " Map Mode Controls: ",
+    "   gm          Switch back to Outline Mode ",
+    "   gl          Toggle layout mode (Vertical <-> Horizontal) ",
+    "   gy          Yank/Copy entire mindmap to clipboard ",
+    "   h           Move to left sibling (Vertical) / Parent (Horizontal) ",
+    "   l           Move to right sibling (Vertical) / Child (Horizontal) ",
+    "   k           Move to parent (Vertical) / Upper sibling (Horizontal) ",
+    "   j           Move to child (Vertical) / Lower sibling (Horizontal) ",
+    "   i/a/cc/<CR> Edit selected node text (floating input) ",
+    "   o           Add child node ",
+    "   O           Add sibling node ",
+    "   dd          Delete selected node and its subtree ",
+    "   <Tab>       Indent node (make child of previous sibling) ",
+    "   <S-Tab>     Outdent node (make sibling of parent) ",
+    "   ?           Show this help popup ",
+    " ",
+    " Press q or <Esc> to close this window. ",
+  }
+
+  local buf = vim.api.nvim_create_buf(false, true)
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, help_text)
+  vim.api.nvim_set_option_value("modifiable", false, { buf = buf })
+  vim.api.nvim_set_option_value("buftype", "nofile", { buf = buf })
+
+  -- Calculate size and position
+  local width = 80
+  local height = #help_text
+  local ui = vim.api.nvim_list_uis()[1]
+  local row = 0
+  local col = 0
+  if ui then
+    row = math.floor((ui.height - height) / 2)
+    col = math.floor((ui.width - width) / 2)
+  else
+    row = 10
+    col = 15
+  end
+
+  local opts = {
+    relative = "editor",
+    width = width,
+    height = height,
+    row = row,
+    col = col,
+    style = "minimal",
+    border = "rounded",
+  }
+
+  local win = vim.api.nvim_open_win(buf, true, opts)
+
+  -- Close mappings
+  local function close()
+    if vim.api.nvim_win_is_valid(win) then
+      vim.api.nvim_win_close(win, true)
+    end
+  end
+
+  vim.keymap.set("n", "q", close, { buffer = buf, silent = true })
+  vim.keymap.set("n", "<Esc>", close, { buffer = buf, silent = true })
+  vim.keymap.set("n", "?", close, { buffer = buf, silent = true })
+end
 
 return M

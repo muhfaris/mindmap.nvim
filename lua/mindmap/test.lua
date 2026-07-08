@@ -418,6 +418,68 @@ end
 print("File comparison tests passed!")
 
 print("----------------------------------------")
+print("Running navigation tests...")
+
+local nav_lines = {
+  "- Root Node",
+  "  - Child 1",
+  "    - Grandchild 1",
+  "  - Child 2",
+}
+local n_tree, n_node_by_id = parser.parse_lines(nav_lines)
+local n_state = {
+  src_buf = 999,
+  map_bufnr = 888,
+  tree = n_tree,
+  node_by_id = n_node_by_id,
+  layout = "vertical",
+  selected_node_id = n_tree.id,
+}
+
+n_state.redraw = function(st)
+  require("mindmap.layout").compute_layout(st.tree, {
+    layout = st.layout,
+    row_gap = 4,
+    col_gap = 4,
+    sibling_gap = 2,
+    margin = 2,
+  })
+end
+
+n_state.redraw(n_state)
+
+local root = n_tree
+local c1 = root.children[1]
+local gc1 = c1.children[1]
+local c2 = root.children[2]
+
+-- Current selected: root
+assert(n_state.selected_node_id == root.id)
+
+-- In vertical layout:
+-- j goes to child
+init.navigate(n_state, "child")
+assert(n_state.selected_node_id == c1.id, "j (child) should navigate to Child 1")
+
+-- l goes to next sibling
+init.navigate(n_state, "next_sibling")
+assert(n_state.selected_node_id == c2.id, "l (next_sibling) should navigate to Child 2")
+
+-- h goes to prev sibling
+init.navigate(n_state, "prev_sibling")
+assert(n_state.selected_node_id == c1.id, "h (prev_sibling) should navigate to Child 1")
+
+-- j goes to child (Grandchild 1)
+init.navigate(n_state, "child")
+assert(n_state.selected_node_id == gc1.id, "j (child) should navigate to Grandchild 1")
+
+-- k goes to parent
+init.navigate(n_state, "parent")
+assert(n_state.selected_node_id == c1.id, "k (parent) should navigate to Child 1")
+
+print("Navigation tests passed!")
+
+print("----------------------------------------")
 print("Running clipboard yanking tests...")
 
 local mock_lines = { "line 1", "line 2", "line 3" }
@@ -437,6 +499,36 @@ assert(yanked == "line 1\nline 2\nline 3\n", "Yanked content does not match map 
 
 vim.api.nvim_buf_delete(map_buf, { force = true })
 print("Clipboard yanking tests passed!")
+
+print("----------------------------------------")
+print("Running show_help tests...")
+
+-- Test show_help opens a floating window
+local start_wins = vim.api.nvim_list_wins()
+init.show_help()
+local end_wins = vim.api.nvim_list_wins()
+
+assert(#end_wins == #start_wins + 1, "Help window should have opened")
+
+-- Close the help window
+local help_win = nil
+for _, w in ipairs(end_wins) do
+  local found = false
+  for _, sw in ipairs(start_wins) do
+    if w == sw then
+      found = true
+      break
+    end
+  end
+  if not found then
+    help_win = w
+    break
+  end
+end
+
+assert(help_win ~= nil, "Could not find help window ID")
+vim.api.nvim_win_close(help_win, true)
+print("Show_help tests passed!")
 
 print("----------------------------------------")
 print("ALL TESTS PASSED SUCCESSFULLY!")

@@ -40,5 +40,14 @@ vim.api.nvim_create_autocmd("FileType", {
       silent = true,
       desc = "Toggle Mindmap Layout (Vertical <-> Horizontal)",
     })
+
+    -- Buffer-local help mapping
+    vim.keymap.set("n", "?", function()
+      require("mindmap").show_help()
+    end, {
+      buffer = ev.buf,
+      silent = true,
+      desc = "Show Mindmap Help Popup",
+    })
   end,
 })

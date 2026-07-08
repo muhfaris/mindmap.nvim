@@ -56,12 +56,69 @@ Create a text file with the `.mm` extension. Write a standard markdown-style lis
 ### 2. Enter Map Mode
 Press `gm` (or run `:MindmapToggle`) inside the `.mm` buffer. The editor will transition into a spatial 2D mindmap.
 
-### 3. Controls (Map Mode)
+#### Vertical Layout Result:
+```text
+                                ┏━━━━━━━━━━━━┓
+                                ┃ Gherkio v2 ┃
+                                ┗━━━━━━┳━━━━━┛
+                        ╭──────────────┴────────────────────╮
+               ╭────────┴────────╮                    ╭─────┴─────╮
+               │ Transform block │                    │ Report UI │
+               ╰────────┬────────╯                    ╰─────┬─────╯
+                  ╭─────┴─────────────╮             ╭───────┴──────╮
+           ╭──────┴─────╮        ╭────┴────╮   ╭────┴───╮   ╭──────┴─────╮
+           │ Array proj │        │ Filters │   │ Try-it │   │ Token mask │
+           ╰──────┬─────╯        ╰─────────╯   ╰────┬───╯   ╰────────────╯
+           ╭──────┴──────╮                          │
+     ╭─────┴────╮  ╭─────┴────╮               ╭─────┴────╮
+     │ dot path │  │ wildcard │               │ CORS fix │
+     ╰──────────╯  ╰──────────╯               ╰──────────╯
+```
+
+#### Horizontal Layout Result:
+```text
+                                                            ╭──────────╮
+                                                         ╭──┤ dot path │
+                                                         │  ╰──────────╯
+                                          ╭────────────╮ │
+                                       ╭──┤ Array proj ├─┤
+                   ╭─────────────────╮ │  ╰────────────╯ │  ╭──────────╮
+                ╭──┤ Transform block ├─┤                 ╰──┤ wildcard │
+                │  ╰─────────────────╯ │                    ╰──────────╯
+                │                      │
+                │                      │
+ ┏━━━━━━━━━━━━┓ │                      │  ╭─────────╮
+ ┃ Gherkio v2 ┣─┤                      ╰──┤ Filters │
+ ┗━━━━━━━━━━━━┛ │                         ╰─────────╯
+                │
+                │
+                │                   ╭────────╮    ╭──────────╮
+                │                ╭──┤ Try-it ├────┤ CORS fix │
+                │                │  ╰────────╯    ╰──────────╯
+                │  ╭───────────╮ │
+                ╰──┤ Report UI ├─┤
+                   ╰───────────╯ │  ╭────────────╮
+                                 ╰──┤ Token mask │
+                                    ╰────────────╯
+```
+
+### 3. Controls
+
+#### Outline Mode
+
+| Key | Description |
+| :--- | :--- |
+| `gm` | Switch to Map Mode (renders outline as 2D diagram) |
+| `gl` | Toggle default layout mode dynamically between Vertical and Horizontal |
+| `?` | Show floating help popup listing all controls |
+
+#### Map Mode
 
 | Key | Description |
 | :--- | :--- |
 | `gm` | Switch back to Outline Mode (returns cursor to the correct line) |
 | `gl` | Toggle layout mode dynamically between Vertical and Horizontal |
+| `gy` | Yank the full rendered mindmap to the system clipboard |
 | `h` | Move to left sibling (Vertical) / Move to parent node (Horizontal) |
 | `l` | Move to right sibling (Vertical) / Move to first child node (Horizontal) |
 | `k` | Move up to parent node (Vertical) / Move to upper sibling (Horizontal) |
@@ -72,6 +129,7 @@ Press `gm` (or run `:MindmapToggle`) inside the `.mm` buffer. The editor will tr
 | `dd` | Delete selected node and its subtree |
 | `<Tab>` | Indent (make child of previous sibling) |
 | `<S-Tab>` | Outdent (make sibling of parent) |
+| `?` | Show floating help popup listing all controls |
 
 ---
 
