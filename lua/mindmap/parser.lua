@@ -49,6 +49,19 @@ function M.parse_lines(lines)
         end
 
         local node = Node.new(text, depth, line_idx)
+        
+        -- Detect anchor/link tags
+        local anchor_id, actual_text = text:match("^%[id:([%w_%-]+)%]%s*(.*)$")
+        local link_id = text:match("^%[link:([%w_%-]+)%]$")
+
+        if anchor_id then
+          node.anchor_id = anchor_id
+          node.text = actual_text
+        elseif link_id then
+          node.link_id = link_id
+          node.text = ""
+        end
+
         node_by_id[node.id] = node
 
         if parent then
@@ -87,7 +100,107 @@ function M.parse_lines(lines)
     end
   end
 
-  return root, node_by_id
+  local warnings = {}
+
+  -- Resolve links
+  if root then
+    local anchors = {}
+    local function find_anchors(node)
+      if node.anchor_id then
+        if anchors[node.anchor_id] then
+          table.insert(warnings, {
+            type = "duplicate_anchor",
+            id = node.anchor_id,
+            line = node.line_num or -1,
+            message = string.format("Duplicate anchor '%s' defined on line %d", node.anchor_id, node.line_num or -1)
+          })
+        else
+          anchors[node.anchor_id] = node
+        end
+      end
+      for _, child in ipairs(node.children) do
+        find_anchors(child)
+      end
+    end
+    find_anchors(root)
+
+    local function clone_subtree(orig, parent)
+      local copy = Node.new(orig.text, parent.depth + 1, nil)
+      copy.parent = parent
+      copy.origin = orig
+      copy.is_clone = true
+      copy.link_id = orig.link_id
+      copy.anchor_id = orig.anchor_id
+      node_by_id[copy.id] = copy
+      for _, child in ipairs(orig.children) do
+        if not child.is_clone then
+          local child_copy = clone_subtree(child, copy)
+          table.insert(copy.children, child_copy)
+        end
+      end
+      return copy
+    end
+
+    local detected_cycles = {}
+
+    local function process_links(node, visited)
+      if node.link_id then
+        local link_name = node.link_id
+        if visited[link_name] then
+          node.text = "[link:" .. link_name .. "] (circular reference)"
+          local cycle_members = {}
+          for k, v in pairs(visited) do
+            if v then
+              table.insert(cycle_members, k)
+            end
+          end
+          table.sort(cycle_members)
+          local cycle_key = table.concat(cycle_members, "-")
+          if not detected_cycles[cycle_key] then
+            detected_cycles[cycle_key] = true
+            table.insert(warnings, {
+              type = "circular_reference",
+              id = link_name,
+              line = node.line_num or -1,
+              message = string.format("Circular reference detected for link '%s' on line %d", link_name, node.line_num or -1)
+            })
+          end
+          return
+        end
+        local target = anchors[link_name]
+        if target then
+          node.text = target.text
+          node.origin = target
+          visited[link_name] = true
+          for _, child in ipairs(target.children) do
+            local child_copy = clone_subtree(child, node)
+            table.insert(node.children, child_copy)
+          end
+          -- Recursively process links inside the cloned children in case the target subtree had link nodes
+          for _, child in ipairs(node.children) do
+            process_links(child, visited)
+          end
+          visited[link_name] = nil
+        else
+          node.text = "[link:" .. link_name .. "] (broken link)"
+          table.insert(warnings, {
+            type = "broken_link",
+            id = link_name,
+            line = node.line_num or -1,
+            message = string.format("Broken link '%s' on line %d (anchor not found)", link_name, node.line_num or -1)
+          })
+        end
+      else
+        for _, child in ipairs(node.children) do
+          process_links(child, visited)
+        end
+      end
+    end
+
+    process_links(root, {})
+  end
+
+  return root, node_by_id, warnings
 end
 
 --- Serializes a tree back into a list of indented strings.
@@ -106,12 +219,20 @@ function M.serialize_tree(root, indent_size)
         depth = depth - 1
       end
       local indent = string.rep(" ", depth * indent_size)
-      table.insert(lines, indent .. "- " .. node.text)
+      if node.anchor_id then
+        table.insert(lines, indent .. "- [id:" .. node.anchor_id .. "] " .. node.text)
+      elseif node.link_id then
+        table.insert(lines, indent .. "- [link:" .. node.link_id .. "]")
+      else
+        table.insert(lines, indent .. "- " .. node.text)
+      end
       node.line_num = #lines -- update line_num based on new output position
     end
 
-    for _, child in ipairs(node.children) do
-      traverse(child)
+    if not node.link_id then
+      for _, child in ipairs(node.children) do
+        traverse(child)
+      end
     end
   end
 

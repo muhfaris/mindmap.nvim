@@ -10,6 +10,7 @@ local files = {
   { name = "complex_tree", layout = "vertical" },
   { name = "mind_tree", layout = "vertical" },
   { name = "mind_tree_horizontal", input = "mind_tree", layout = "horizontal" },
+  { name = "user_example", layout = "vertical" },
 }
 
 for _, entry in ipairs(files) do

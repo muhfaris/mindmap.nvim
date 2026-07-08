@@ -111,6 +111,98 @@ assert(mr_root.children[2].depth == 1)
 print("Parser edge-case tests passed!")
 
 print("----------------------------------------")
+print("Running anchor/link reference tests...")
+
+local ref_lines = {
+  "- Root Node",
+  "  - [id:step1] First step",
+  "    - Substep 1.1",
+  "  - Step 2",
+  "    - [link:step1]",
+}
+local r_root, r_node_by_id = parser.parse_lines(ref_lines)
+
+assert(r_root ~= nil, "Ref root should not be nil")
+assert(#r_root.children == 2, "Root should have 2 children")
+
+local step1 = r_root.children[1]
+assert(step1.anchor_id == "step1", "step1 should have anchor_id")
+assert(step1.text == "First step", "step1 text should be First step")
+assert(#step1.children == 1, "step1 should have 1 child")
+assert(step1.children[1].text == "Substep 1.1", "step1 child text mismatch")
+
+local step2 = r_root.children[2]
+assert(#step2.children == 1, "step2 should have 1 child (the link)")
+local link_node = step2.children[1]
+assert(link_node.link_id == "step1", "link_node should have link_id")
+assert(link_node.text == "First step", "link_node should resolve and clone step1's text")
+assert(link_node.is_clone == nil, "link_node itself is not is_clone (it is a link node)")
+assert(link_node.origin == step1, "link_node.origin should point to step1")
+
+assert(#link_node.children == 1, "link_node should clone step1's children list")
+local cloned_child = link_node.children[1]
+assert(cloned_child.text == "Substep 1.1", "cloned child text mismatch")
+assert(cloned_child.is_clone == true, "cloned child should have is_clone flag")
+assert(cloned_child.origin == step1.children[1], "cloned child origin should point to Substep 1.1")
+
+-- Verify serialization is clean (omits cloned children under link_node)
+local r_serialized = parser.serialize_tree(r_root, 2)
+assert(#r_serialized == 5, "Serialized lines count mismatch: " .. #r_serialized)
+assert(r_serialized[1] == "- Root Node", "Root mismatch")
+assert(r_serialized[2] == "  - [id:step1] First step", "Anchor mismatch")
+assert(r_serialized[3] == "    - Substep 1.1", "Substep mismatch")
+assert(r_serialized[4] == "  - Step 2", "Step 2 mismatch")
+assert(r_serialized[5] == "    - [link:step1]", "Link serialization mismatch")
+
+-- Verify circular reference handling
+local circular_lines = {
+  "- Root Node",
+  "  - [id:a] Node A",
+  "    - [link:b]",
+  "  - [id:b] Node B",
+  "    - [link:a]",
+}
+local c_root, _, c_warnings = parser.parse_lines(circular_lines)
+assert(c_root ~= nil, "Circular root should not be nil")
+local node_a = c_root.children[1]
+local link_b = node_a.children[1]
+assert(link_b.text == "Node B", "link_b should resolve to Node B")
+local node_b_clone = link_b.children[1]
+assert(node_b_clone.text == "Node A", "Node B clone's child should resolve to Node A")
+local node_a_clone = node_b_clone.children[1]
+assert(node_a_clone.text == "[link:b] (circular reference)", "Circular reference should be detected and marked")
+assert(#c_warnings == 1, "Should have exactly 1 warning for circular reference")
+assert(c_warnings[1].type == "circular_reference", "Warning type mismatch")
+assert(c_warnings[1].id == "b", "Warning id mismatch")
+
+-- Verify broken link handling
+local broken_lines = {
+  "- Root Node",
+  "  - [link:nonexistent]",
+}
+local b_root, _, b_warnings = parser.parse_lines(broken_lines)
+assert(b_root ~= nil, "Broken root should not be nil")
+local broken_link = b_root.children[1]
+assert(broken_link.text == "[link:nonexistent] (broken link)", "Broken link should be marked")
+assert(#b_warnings == 1, "Should have exactly 1 warning for broken link")
+assert(b_warnings[1].type == "broken_link", "Warning type mismatch")
+assert(b_warnings[1].id == "nonexistent", "Warning id mismatch")
+
+-- Verify duplicate anchor warning
+local duplicate_lines = {
+  "- Root Node",
+  "  - [id:dup] Node 1",
+  "  - [id:dup] Node 2",
+}
+local d_root, _, d_warnings = parser.parse_lines(duplicate_lines)
+assert(d_root ~= nil, "Duplicate root should not be nil")
+assert(#d_warnings == 1, "Should have exactly 1 warning for duplicate anchor")
+assert(d_warnings[1].type == "duplicate_anchor", "Warning type mismatch")
+assert(d_warnings[1].id == "dup", "Warning id mismatch")
+
+print("Anchor/link reference tests passed!")
+
+print("----------------------------------------")
 print("Running state operations tests...")
 
 local init = require("mindmap")
@@ -140,12 +232,23 @@ init.update_tree_and_redraw = function(st)
   st.last_serialized = parser.serialize_tree(st.tree)
 end
 
+-- Helper to get active references from state since re-parsing creates new nodes
+local function get_active_nodes()
+  local root = state.tree
+  local child1 = root.children[1]
+  local child2 = root.children[2]
+  if not child2 and child1 then
+    child2 = child1.children[1]
+  end
+  return root, child1, child2
+end
+
 -- Test indent_node (Child 2 should become child of Child 1)
-local c1 = tree.children[1]
-local c2 = tree.children[2]
+local tree, c1, c2 = get_active_nodes()
 assert(c2.parent == tree)
 
 init.indent_node(state)
+tree, c1, c2 = get_active_nodes()
 assert(c2.parent == c1, "Child 2 should now be child of Child 1")
 assert(c2.depth == 2, "Child 2 depth should be updated to 2")
 assert(#c1.children == 1, "Child 1 should have 1 child")
@@ -154,6 +257,7 @@ assert(#tree.children == 1, "Root should now have 1 child")
 
 -- Test outdent_node (Child 2 should become sibling of Child 1 under Root again)
 init.outdent_node(state)
+tree, c1, c2 = get_active_nodes()
 assert(c2.parent == tree, "Child 2 should be reparented to Root")
 assert(c2.depth == 1, "Child 2 depth should be 1")
 assert(#tree.children == 2, "Root should have 2 children again")
@@ -163,6 +267,7 @@ state.selected_node_id = c1.id
 init.edit_node = function() end -- Stub out window float editor
 
 init.add_child(state)
+tree, c1, c2 = get_active_nodes()
 assert(#c1.children == 1, "Child 1 should have a new child")
 local new_child = c1.children[1]
 assert(new_child.text == "New Node", "Default text should be 'New Node'")
@@ -171,6 +276,7 @@ assert(state.selected_node_id == new_child.id, "New child should be selected")
 
 -- Test add_sibling
 init.add_sibling(state)
+tree, c1, c2 = get_active_nodes()
 assert(#c1.children == 2, "Child 1 should now have 2 children")
 local sibling = c1.children[2]
 assert(sibling.text == "New Node")
@@ -179,6 +285,7 @@ assert(state.selected_node_id == sibling.id, "New sibling should be selected")
 
 -- Test delete_node
 init.delete_node(state)
+tree, c1, c2 = get_active_nodes()
 assert(#c1.children == 1, "Sibling should be deleted")
 assert(state.selected_node_id == c1.id, "Selection should snap back to parent")
 
@@ -201,6 +308,71 @@ init.redraw = orig_redraw
 print("State operations tests passed!")
 
 print("----------------------------------------")
+print("Running clone mutation propagation tests...")
+
+local clone_lines = {
+  "- Root Node",
+  "  - [id:src] Original Source",
+  "    - Nested Child",
+  "  - Section 2",
+  "    - [link:src]",
+}
+local c_tree, c_node_by_id = parser.parse_lines(clone_lines)
+local c_state = {
+  src_buf = 999,
+  map_bufnr = 888,
+  tree = c_tree,
+  node_by_id = c_node_by_id,
+}
+
+local function get_live_clone_nodes()
+  local root = c_state.tree
+  local src = root.children[1]
+  local sec2 = root.children[2]
+  local clone = sec2.children[1]
+  return root, src, clone
+end
+
+local root, src, clone = get_live_clone_nodes()
+assert(clone.origin == src, "Clone origin link mismatch")
+assert(#src.children == 1, "Source should start with 1 child")
+assert(#clone.children == 1, "Clone should also start with 1 child")
+
+-- 1. Test add_child on the clone
+c_state.selected_node_id = clone.id
+init.add_child(c_state)
+
+root, src, clone = get_live_clone_nodes()
+-- Verify both src and clone now have the new child
+assert(#src.children == 2, "Source should have 2 children now")
+assert(src.children[2].text == "New Node", "Added child text mismatch under source")
+assert(#clone.children == 2, "Clone should have 2 children now (cloned from source)")
+assert(clone.children[2].text == "New Node", "Added child text mismatch under clone")
+
+-- 2. Test add_sibling on a child of the clone
+-- Let's select the first child of the clone
+local clone_child = clone.children[1]
+c_state.selected_node_id = clone_child.id
+init.add_sibling(c_state)
+
+root, src, clone = get_live_clone_nodes()
+-- Adding sibling to clone_child (origin's child) should add sibling to the origin's child
+assert(#src.children[1].parent.children == 3, "Sibling should be added to origin children list")
+assert(#clone.children[1].parent.children == 3, "Sibling should propagate to clone children list")
+
+-- 3. Test delete_node on a child of the clone
+-- Select the newly added sibling
+local sibling = clone.children[2]
+c_state.selected_node_id = sibling.id
+init.delete_node(c_state)
+
+root, src, clone = get_live_clone_nodes()
+assert(#src.children == 2, "Deleted node should be removed from source")
+assert(#clone.children == 2, "Deleted node should be removed from clone")
+
+print("Clone mutation propagation tests passed!")
+
+print("----------------------------------------")
 print("Running file-comparison integration tests...")
 
 local render = require("mindmap.render")
@@ -210,6 +382,7 @@ local files = {
   { name = "complex_tree", layout = "vertical" },
   { name = "mind_tree", layout = "vertical" },
   { name = "mind_tree_horizontal", input = "mind_tree", layout = "horizontal" },
+  { name = "user_example", layout = "vertical" },
 }
 
 for _, entry in ipairs(files) do

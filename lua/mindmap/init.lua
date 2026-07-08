@@ -23,8 +23,43 @@ local function update_descendant_depths(node)
   end
 end
 
+local function get_node_path(node)
+  local path = {}
+  local curr = node
+  while curr.parent do
+    local parent = curr.parent
+    local idx = nil
+    for i, child in ipairs(parent.children) do
+      if child == curr then
+        idx = i
+        break
+      end
+    end
+    if not idx then
+      return nil
+    end
+    table.insert(path, 1, idx)
+    curr = parent
+  end
+  return path
+end
+
+local function find_node_by_path(root, path)
+  if not path then return nil end
+  local curr = root
+  for _, idx in ipairs(path) do
+    if curr.children and curr.children[idx] then
+      curr = curr.children[idx]
+    else
+      return nil
+    end
+  end
+  return curr
+end
+
 --- Redraws the map in the scratch buffer and snaps the cursor.
 function M.redraw(state)
+  if not vim.api.nvim_buf_is_valid(state.map_bufnr) then return end
   require("mindmap.render").render_map(state.map_bufnr, state.tree, state.selected_node_id, state.layout)
 
   local sel = state.node_by_id[state.selected_node_id]
@@ -42,11 +77,63 @@ function M.redraw(state)
   end
 end
 
+local function handle_warnings(state, warnings)
+  warnings = warnings or {}
+  state.warnings = state.warnings or {}
+
+  -- Compare warnings to see if they changed
+  local warnings_changed = false
+  if #warnings ~= #state.warnings then
+    warnings_changed = true
+  else
+    for i = 1, #warnings do
+      if warnings[i].message ~= state.warnings[i].message then
+        warnings_changed = true
+        break
+      end
+    end
+  end
+
+  if warnings_changed then
+    state.warnings = warnings
+    if #warnings > 0 then
+      local msg = "Mindmap Warnings:\n"
+      for _, w in ipairs(warnings) do
+        msg = msg .. "- " .. w.message .. "\n"
+      end
+      vim.notify(msg, vim.log.levels.WARN)
+    end
+  end
+end
+
+--- Re-parses the tree and redraws while keeping the selected node by path.
+function M.sync_tree_with_path(state, path)
+  local lines = require("mindmap.parser").serialize_tree(state.tree)
+  if vim.api.nvim_buf_is_valid(state.src_buf) then
+    vim.api.nvim_buf_set_lines(state.src_buf, 0, -1, false, lines)
+  end
+
+  local new_tree, new_node_by_id, warnings = require("mindmap.parser").parse_lines(lines)
+  if new_tree then
+    state.tree = new_tree
+    state.node_by_id = new_node_by_id
+    handle_warnings(state, warnings)
+    local new_selected = find_node_by_path(new_tree, path)
+    if new_selected then
+      state.selected_node_id = new_selected.id
+    else
+      state.selected_node_id = new_tree.id
+    end
+  end
+
+  M.redraw(state)
+end
+
 --- Updates the source outline buffer with the current tree, then redraws the map.
 function M.update_tree_and_redraw(state)
-  local lines = require("mindmap.parser").serialize_tree(state.tree)
-  vim.api.nvim_buf_set_lines(state.src_buf, 0, -1, false, lines)
-  M.redraw(state)
+  local old_selected = state.node_by_id[state.selected_node_id]
+  local path = old_selected and get_node_path(old_selected) or nil
+  M.sync_tree_with_path(state, path)
 end
 
 --- Toggles the layout of the mindmap for the current buffer.
@@ -111,7 +198,7 @@ function M.toggle()
   if state.mode == "outline" and not is_in_map then
     -- Toggle to MAP mode
     local lines = vim.api.nvim_buf_get_lines(state.src_buf, 0, -1, false)
-    local tree, node_by_id = require("mindmap.parser").parse_lines(lines)
+    local tree, node_by_id, warnings = require("mindmap.parser").parse_lines(lines)
     if not tree then
       vim.notify("Empty outline, cannot show map", vim.log.levels.WARN)
       return
@@ -119,6 +206,8 @@ function M.toggle()
 
     state.tree = tree
     state.node_by_id = node_by_id
+    state.warnings = {}
+    handle_warnings(state, warnings)
 
     -- Find matching selected node based on cursor position in outline
     local cursor_line = vim.api.nvim_win_get_cursor(0)[1]
@@ -353,6 +442,11 @@ function M.edit_node(state)
 
   vim.cmd("startinsert!")
 
+  local target_node = node
+  while target_node.origin do
+    target_node = target_node.origin
+  end
+
   local saved = false
   local function save_changes()
     if saved then return end
@@ -364,7 +458,7 @@ function M.edit_node(state)
     pcall(vim.api.nvim_win_close, edit_win, true)
     pcall(vim.api.nvim_buf_delete, edit_buf, { force = true })
 
-    node.text = new_text
+    target_node.text = new_text
     M.update_tree_and_redraw(state)
   end
 
@@ -383,13 +477,22 @@ function M.add_child(state)
   local sel = state.node_by_id[state.selected_node_id]
   if not sel then return end
 
-  local new_node = require("mindmap.parser").Node.new("New Node", sel.depth + 1, nil)
-  new_node.parent = sel
-  table.insert(sel.children, new_node)
+  local target = sel
+  while target.origin do
+    target = target.origin
+  end
+
+  local new_node = require("mindmap.parser").Node.new("New Node", target.depth + 1, nil)
+  new_node.parent = target
+  table.insert(target.children, new_node)
   state.node_by_id[new_node.id] = new_node
 
-  state.selected_node_id = new_node.id
-  M.update_tree_and_redraw(state)
+  local sel_path = get_node_path(sel)
+  if sel_path then
+    table.insert(sel_path, #target.children)
+  end
+
+  M.sync_tree_with_path(state, sel_path)
   M.edit_node(state)
 end
 
@@ -403,14 +506,24 @@ function M.add_sibling(state)
     return
   end
 
-  local parent = sel.parent
-  local new_node = require("mindmap.parser").Node.new("New Node", sel.depth, nil)
+  local target = sel
+  while target.origin do
+    target = target.origin
+  end
+
+  local parent = target.parent
+  if not parent then
+    vim.notify("Cannot add sibling to root node", vim.log.levels.WARN)
+    return
+  end
+
+  local new_node = require("mindmap.parser").Node.new("New Node", target.depth, nil)
   new_node.parent = parent
   state.node_by_id[new_node.id] = new_node
 
   local idx = nil
   for i, child in ipairs(parent.children) do
-    if child.id == sel.id then
+    if child.id == target.id then
       idx = i
       break
     end
@@ -422,8 +535,21 @@ function M.add_sibling(state)
     table.insert(parent.children, new_node)
   end
 
-  state.selected_node_id = new_node.id
-  M.update_tree_and_redraw(state)
+  local parent_path = get_node_path(sel.parent)
+  if parent_path then
+    local sel_idx = nil
+    for i, child in ipairs(sel.parent.children) do
+      if child == sel then
+        sel_idx = i
+        break
+      end
+    end
+    if sel_idx then
+      table.insert(parent_path, sel_idx + 1)
+    end
+  end
+
+  M.sync_tree_with_path(state, parent_path)
   M.edit_node(state)
 end
 
@@ -453,9 +579,14 @@ function M.delete_node(state)
     if confirm ~= 1 then return end
   end
 
-  local parent = sel.parent
+  local target = sel
+  while target.origin do
+    target = target.origin
+  end
+
+  local parent = target.parent
   for idx, child in ipairs(parent.children) do
-    if child.id == sel.id then
+    if child.id == target.id then
       table.remove(parent.children, idx)
       break
     end
@@ -469,8 +600,39 @@ function M.delete_node(state)
   end
   remove_map(sel)
 
-  state.selected_node_id = parent.id
-  M.update_tree_and_redraw(state)
+  local next_path = nil
+  if #sel.parent.children > 1 then
+    local sel_idx = nil
+    for i, child in ipairs(sel.parent.children) do
+      if child == sel then
+        sel_idx = i
+        break
+      end
+    end
+    if sel_idx then
+      local next_idx = nil
+      if sel_idx < #sel.parent.children then
+        next_idx = sel_idx + 1
+      else
+        next_idx = sel_idx - 1
+      end
+
+      next_path = get_node_path(sel.parent)
+      if next_path then
+        local adjusted_idx = next_idx
+        if next_idx > sel_idx then
+          adjusted_idx = next_idx - 1
+        end
+        table.insert(next_path, adjusted_idx)
+      end
+    end
+  end
+
+  if not next_path then
+    next_path = get_node_path(sel.parent)
+  end
+
+  M.sync_tree_with_path(state, next_path)
 end
 
 --- Indent node (make child of previous sibling).
@@ -478,10 +640,17 @@ function M.indent_node(state)
   local sel = state.node_by_id[state.selected_node_id]
   if not sel or not sel.parent then return end
 
-  local parent = sel.parent
+  local target = sel
+  while target.origin do
+    target = target.origin
+  end
+
+  local parent = target.parent
+  if not parent then return end
+
   local idx = nil
   for i, child in ipairs(parent.children) do
-    if child.id == sel.id then
+    if child.id == target.id then
       idx = i
       break
     end
@@ -491,12 +660,34 @@ function M.indent_node(state)
     local prev = parent.children[idx - 1]
     table.remove(parent.children, idx)
 
-    sel.parent = prev
-    sel.depth = prev.depth + 1
-    update_descendant_depths(sel)
+    target.parent = prev
+    target.depth = prev.depth + 1
+    update_descendant_depths(target)
 
-    table.insert(prev.children, sel)
-    M.update_tree_and_redraw(state)
+    table.insert(prev.children, target)
+
+    local sel_idx = nil
+    for i, child in ipairs(sel.parent.children) do
+      if child == sel then
+        sel_idx = i
+        break
+      end
+    end
+
+    local new_path = nil
+    if sel.origin then
+      if sel_idx and sel_idx > 1 then
+        local prev_clone = sel.parent.children[sel_idx - 1]
+        new_path = get_node_path(prev_clone)
+        if new_path then
+          table.insert(new_path, #prev_clone.children + 1)
+        end
+      end
+    else
+      new_path = get_node_path(target)
+    end
+
+    M.sync_tree_with_path(state, new_path)
   end
 end
 
@@ -505,12 +696,18 @@ function M.outdent_node(state)
   local sel = state.node_by_id[state.selected_node_id]
   if not sel or not sel.parent or not sel.parent.parent then return end
 
-  local parent = sel.parent
+  local target = sel
+  while target.origin do
+    target = target.origin
+  end
+
+  local parent = target.parent
   local grandparent = parent.parent
+  if not grandparent then return end
 
   local idx = nil
   for i, child in ipairs(parent.children) do
-    if child.id == sel.id then
+    if child.id == target.id then
       idx = i
       break
     end
@@ -519,9 +716,9 @@ function M.outdent_node(state)
   if idx then
     table.remove(parent.children, idx)
 
-    sel.parent = grandparent
-    sel.depth = grandparent.depth + 1
-    update_descendant_depths(sel)
+    target.parent = grandparent
+    target.depth = grandparent.depth + 1
+    update_descendant_depths(target)
 
     local p_idx = nil
     for i, child in ipairs(grandparent.children) do
@@ -532,12 +729,31 @@ function M.outdent_node(state)
     end
 
     if p_idx then
-      table.insert(grandparent.children, p_idx + 1, sel)
+      table.insert(grandparent.children, p_idx + 1, target)
     else
-      table.insert(grandparent.children, sel)
+      table.insert(grandparent.children, target)
     end
 
-    M.update_tree_and_redraw(state)
+    local new_path = nil
+    if sel.origin then
+      new_path = get_node_path(sel.parent.parent)
+      if new_path then
+        local parent_idx = nil
+        for i, child in ipairs(sel.parent.parent.children) do
+          if child == sel.parent then
+            parent_idx = i
+            break
+          end
+        end
+        if parent_idx then
+          table.insert(new_path, parent_idx + 1)
+        end
+      end
+    else
+      new_path = get_node_path(target)
+    end
+
+    M.sync_tree_with_path(state, new_path)
   end
 end
 

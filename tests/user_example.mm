@@ -1,0 +1,14 @@
+- Module Ticket
+  - UI
+    - Create
+      - [link:fetch_branches]
+    - Update
+      - [link:fetch_branches]
+  - Service
+    - Create
+      - fn: upsert branch
+        - db: Fetch branches
+        - [id:fetch_branches] masterdata: Fetch branches
+        - masterdata: Fetch branch functions by branch id
+        - db: Update branch data
+    - Update
