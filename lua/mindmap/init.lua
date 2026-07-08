@@ -316,6 +316,7 @@ function M.edit_node(state)
 
   -- Snap cursor to center first to guarantee the cursor is on the correct line/col
   vim.api.nvim_win_set_cursor(0, { node.row + 1, node.center_col - 1 })
+  vim.cmd("redraw")
 
   local edit_buf = vim.api.nvim_create_buf(false, true)
   vim.api.nvim_buf_set_lines(edit_buf, 0, -1, false, { node.text })
