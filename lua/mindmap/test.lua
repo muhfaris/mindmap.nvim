@@ -418,6 +418,27 @@ end
 print("File comparison tests passed!")
 
 print("----------------------------------------")
+print("Running clipboard yanking tests...")
+
+local mock_lines = { "line 1", "line 2", "line 3" }
+local map_buf = vim.api.nvim_create_buf(false, true)
+vim.api.nvim_buf_set_lines(map_buf, 0, -1, false, mock_lines)
+
+local test_state = {
+  map_bufnr = map_buf,
+}
+
+-- Clear register first
+vim.fn.setreg("+", "")
+init.yank_map(test_state)
+
+local yanked = vim.fn.getreg("+")
+assert(yanked == "line 1\nline 2\nline 3\n", "Yanked content does not match map buffer content")
+
+vim.api.nvim_buf_delete(map_buf, { force = true })
+print("Clipboard yanking tests passed!")
+
+print("----------------------------------------")
 print("ALL TESTS PASSED SUCCESSFULLY!")
 print("----------------------------------------")
 

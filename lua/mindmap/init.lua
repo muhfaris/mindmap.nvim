@@ -167,6 +167,14 @@ function M.toggle_layout()
   end
 end
 
+--- Yanks the entire rendered mindmap to the system clipboard.
+function M.yank_map(state)
+  if not state or not vim.api.nvim_buf_is_valid(state.map_bufnr) then return end
+  local lines = vim.api.nvim_buf_get_lines(state.map_bufnr, 0, -1, false)
+  vim.fn.setreg("+", table.concat(lines, "\n") .. "\n")
+  vim.notify("Rendered mindmap yanked to system clipboard!", vim.log.levels.INFO)
+end
+
 --- Main toggle function (Outline <-> Map).
 function M.toggle()
   local src_buf = vim.api.nvim_get_current_buf()
@@ -283,6 +291,9 @@ function M.setup_map_keymaps(map_buf, src_buf)
 
   -- Layout Toggle
   map("gl", function() M.toggle_layout() end, "Toggle Layout (vertical <-> horizontal)")
+
+  -- Yank Map to Clipboard
+  map("gy", function(state) M.yank_map(state) end, "Yank/Copy entire mindmap to clipboard")
 
   -- Navigation (adaptive to layout)
   map("k", function(state)
