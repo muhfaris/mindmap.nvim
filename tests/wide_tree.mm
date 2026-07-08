@@ -1,0 +1,31 @@
+- Main Project
+  - Auth
+  - Database
+  - API
+  - Frontend
+  - Docs
+  - Testing
+- Second Project 
+  - Cron
+  - Database
+  - Redis
+  - Thirdparty
+    - Send Grid
+    - OpenAI
+      - API Key
+    - Stripe
+    - Payment Gateway
+      - Xendit
+      - Midtrans
+      - Doku
+    - Linear
+- Third Project
+  - Cron
+  - Database
+  - Redis
+  - Thirdparty
+    - Send Grid
+    - OpenAI
+    - Stripe
+    - Midtrans
+    - Linear

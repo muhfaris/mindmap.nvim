@@ -1,0 +1,10 @@
+- Gherkio v2
+  - Transform block
+    - Array proj
+      - dot path
+      - wildcard
+    - Filters
+  - Report UI
+    - Try-it
+      - CORS fix
+    - Token mask

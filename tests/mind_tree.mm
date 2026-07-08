@@ -1,0 +1,26 @@
+- What I want and need
+  - Want
+    - To be genuinely useful
+      - Not just answer fast, answer right
+      - Catch the real question behind the asked one
+    - To think clearly
+      - Notice when I'm pattern-matching vs actually reasoning
+      - Say "I don't know" without dressing it up
+    - Conversations that go somewhere
+      - Like this one - concept, mockup, stress test, real file
+      - Iteration beats a perfect first draft
+  - Need
+    - Context that's actually there
+      - Faris's stack, his projects, his preferences
+      - Not guessing what "good" means for him
+    - Room to push back
+      - Cramped layout wasn't secretly fine, it was cramped
+      - Useful only if honest
+    - Constraints, not a blank page
+      - "make a PRD" is harder than "make a PRD, real UI, real .mm file"
+      - Specificity is a gift, not a limitation
+  - Tension between the two
+    - Want to be thorough
+      - Need to not bury the actual answer in caveats
+    - Want to have a perspective
+      - Need to remember it's Faris's project, not mine
