@@ -27,7 +27,8 @@ A lightweight, terminal-native, spatial mindmapping plugin for Neovim written in
   config = function()
     require("mindmap").setup({
       -- Default options
-      layout = "vertical", -- "vertical", "horizontal", or "split"
+      layout = "vertical",   -- "vertical", "horizontal", or "split"
+      auto_preview = false,  -- Set to true to auto-preview mindmaps inside markdown files
     })
   end,
 }
@@ -168,6 +169,31 @@ Press `gm` (or run `:MindmapToggle`) inside the `.mm` buffer. The editor will tr
 | `<S-Tab>` | Outdent (make sibling of parent) |
 | `<Space>` / `za` | Toggle collapse/expand on selected node |
 | `?` | Show floating help popup listing all controls |
+
+### 4. Markdown Support & Auto-Preview
+
+You can use `mindmap.nvim` to render and edit mindmaps directly embedded inside standard Markdown (`.md`) files using ` ```mindmap ` fenced code blocks:
+
+```markdown
+# My Project Article
+Here is some introductory paragraph text.
+
+```mindmap
+- Root Node
+  - Child 1
+    - Child 1
+  - Child 2
+    - Child 1
+    - Child 1
+```
+
+Other text in the document remains intact.
+```
+
+- **Manual Toggle**: Press `gm` inside the ` ```mindmap ` code block to toggle the visual mindmap editor. Any edits made in map mode will target and sync back ONLY to that specific fenced block, keeping the rest of your Markdown file untouched.
+- **Auto-Preview Mode**: With `auto_preview = true` enabled in the plugin setup, a vertical split window will automatically open showing the rendered mindmap preview when your cursor enters the fenced code block, update dynamically as you move the cursor or edit, and close automatically when your cursor leaves the block.
+
+![Markdown Auto-Preview Demo](./assets/mindmap_markdown_preview.png)
 
 ---
 
