@@ -1,6 +1,11 @@
 -- Headless tests for mindmap.nvim
 -- Run with: nvim --headless -c "set rtp+=." -c "luafile lua/mindmap/test.lua" -c "qa!"
 
+package.loaded["mindmap"] = nil
+package.loaded["mindmap.parser"] = nil
+package.loaded["mindmap.layout"] = nil
+package.loaded["mindmap.render"] = nil
+
 local parser = require("mindmap.parser")
 local layout = require("mindmap.layout")
 
@@ -205,7 +210,10 @@ print("Anchor/link reference tests passed!")
 print("----------------------------------------")
 print("Running state operations tests...")
 
+package.loaded["mindmap"] = nil
 local init = require("mindmap")
+print("Loaded mindmap path:", vim.api.nvim_get_runtime_file("lua/mindmap/init.lua", true)[1])
+print("init.toggle_collapse:", tostring(init.toggle_collapse))
 
 -- Test setup configuration
 init.setup({ layout = "horizontal" })
@@ -300,6 +308,8 @@ init.redraw = function() end
 init.toggle_layout()
 assert(state.layout == "horizontal", "Layout should toggle to horizontal")
 init.toggle_layout()
+assert(state.layout == "split", "Layout should toggle to split")
+init.toggle_layout()
 assert(state.layout == "vertical", "Layout should toggle back to vertical")
 
 vim.api.nvim_get_current_buf = orig_get_buf
@@ -383,6 +393,7 @@ local files = {
   { name = "mind_tree", layout = "vertical" },
   { name = "mind_tree_horizontal", input = "mind_tree", layout = "horizontal" },
   { name = "user_example", layout = "vertical" },
+  { name = "split_tree", layout = "split" },
 }
 
 for _, entry in ipairs(files) do
@@ -531,7 +542,211 @@ vim.api.nvim_win_close(help_win, true)
 print("Show_help tests passed!")
 
 print("----------------------------------------")
+print("Running node collapse/folding tests...")
+
+local collapse_lines = {
+  "- Root Node",
+  "  - Child 1",
+  "    - Grandchild 1",
+  "    - Grandchild 2",
+  "  - Child 2",
+}
+local c_tree, c_node_by_id = parser.parse_lines(collapse_lines)
+local c_state = {
+  src_buf = 999,
+  map_bufnr = 888,
+  tree = c_tree,
+  node_by_id = c_node_by_id,
+  layout = "vertical",
+  selected_node_id = c_tree.children[1].id, -- Select Child 1
+}
+
+local child1 = c_tree.children[1]
+assert(#child1.children == 2, "Child 1 should have 2 children initially")
+assert(child1.collapsed == nil, "Child 1 should not be collapsed initially")
+
+-- Calculate layout before collapse
+local initial_max_row, initial_max_col = layout.compute_layout(c_tree, { layout = "vertical", sibling_gap = 2, margin = 2 })
+
+-- Toggle collapse
+init.toggle_collapse(c_state)
+assert(child1.collapsed == true, "Child 1 should now be collapsed")
+
+-- Calculate layout after collapse
+local collapsed_max_row, collapsed_max_col = layout.compute_layout(c_tree, { layout = "vertical", sibling_gap = 2, margin = 2 })
+
+-- The layout size should change or at least the grandchildren should have no row/col assigned
+assert(child1.children[1].row == nil, "Grandchild 1 should not have a row assigned since it's collapsed")
+assert(child1.children[2].row == nil, "Grandchild 2 should not have a row assigned since it's collapsed")
+
+-- Test display name modification in render
+-- Mock rendering environment to check display name
+local mock_buf = vim.api.nvim_create_buf(false, true)
+require("mindmap.render").render_map(mock_buf, c_tree, c_state.selected_node_id, "vertical")
+local mock_rendered_lines = vim.api.nvim_buf_get_lines(mock_buf, 0, -1, false)
+vim.api.nvim_buf_delete(mock_buf, { force = true })
+
+-- Search mock rendered lines for Child 1 text with indicator
+local found_indicator = false
+for _, line in ipairs(mock_rendered_lines) do
+  if line:find("Child 1  ⊕") or line:find("Child 1 ⊕") then
+    found_indicator = true
+    break
+  end
+end
+assert(found_indicator, "Rendered output should display collapse indicator ⊕")
+
+-- Let's mock a proper buffer for sync_tree_with_path testing
+local src_buf = vim.api.nvim_create_buf(false, true)
+c_state.src_buf = src_buf
+c_state.map_bufnr = vim.api.nvim_create_buf(false, true)
+
+-- Re-sync
+init.sync_tree_with_path(c_state, { 1 }) -- Path to Child 1
+local new_child1 = c_state.tree.children[1]
+assert(new_child1.collapsed == true, "Collapsed state should be preserved after tree sync")
+
+-- Expand
+init.toggle_collapse(c_state)
+assert(new_child1.collapsed == false, "Child 1 should be expanded again")
+
+-- Re-sync again
+init.sync_tree_with_path(c_state, { 1 })
+local expanded_child1 = c_state.tree.children[1]
+assert(expanded_child1.collapsed == false, "Expanded state should be preserved after tree sync")
+
+vim.api.nvim_buf_delete(c_state.src_buf, { force = true })
+vim.api.nvim_buf_delete(c_state.map_bufnr, { force = true })
+
+print("Node collapse/folding tests passed!")
+
+print("----------------------------------------")
+print("Running split layout tests...")
+
+local split_lines = {
+  "- Root Node",
+  "  - Right Child 1",
+  "    - Right Grandchild 1",
+  "  - Left Child 2",
+  "    - Left Grandchild 2",
+}
+local s_root, _ = parser.parse_lines(split_lines)
+assert(s_root ~= nil)
+
+-- Compute split layout
+layout.compute_layout(s_root, {
+  layout = "split",
+  row_gap = 4,
+  col_gap = 4,
+  sibling_gap = 2,
+  margin = 2,
+})
+
+-- Verify directions
+local rc1 = s_root.children[1]
+local lc2 = s_root.children[2]
+
+assert(rc1.direction == "right", "First child should be right direction")
+assert(rc1.children[1].direction == "right", "Right child's descendant should be right direction")
+
+assert(lc2.direction == "left", "Second child should be left direction")
+assert(lc2.children[1].direction == "left", "Left child's descendant should be left direction")
+
+-- Verify coordinates (left side should grow leftwards, so cols should be smaller)
+print(string.format("Root: col=%d", s_root.col))
+print(string.format("Right child: col=%d", rc1.col))
+print(string.format("Left child: col=%d", lc2.col))
+
+assert(rc1.col > s_root.col, "Right child column should be greater than root column")
+assert(lc2.col < s_root.col, "Left child column should be less than root column")
+
+-- Verify descendants
+assert(rc1.children[1].col > rc1.col, "Right grandchild column should be greater than right child column")
+assert(lc2.children[1].col < lc2.col, "Left grandchild column should be less than left child column")
+
+-- Verify spatial navigation in split layout
+local split_state = {
+  src_buf = 999,
+  map_bufnr = 888,
+  tree = s_root,
+  node_by_id = {},
+  layout = "split",
+  selected_node_id = s_root.id,
+}
+local function index_nodes(node)
+  split_state.node_by_id[node.id] = node
+  for _, child in ipairs(node.children) do
+    index_nodes(child)
+  end
+end
+index_nodes(s_root)
+
+-- Stub redraw
+local redraw_called = 0
+init.redraw = function() redraw_called = redraw_called + 1 end
+
+-- At root, pressing 'h' should select first left child (Left Child 2)
+vim.api.nvim_get_current_buf = function() return 999 end
+init.states[999] = split_state
+
+-- Locate the 'h' keymap function manually by calling the mapping logic
+local captured_maps = {}
+local orig_keymap_set = vim.keymap.set
+vim.keymap.set = function(mode, key, fn, opts)
+  captured_maps[key] = fn
+end
+
+init.setup_map_keymaps(888, 999)
+
+-- Restore
+vim.keymap.set = orig_keymap_set
+
+local h_fn = captured_maps["h"]
+local l_fn = captured_maps["l"]
+
+assert(h_fn ~= nil, "h keymap function should be registered")
+assert(l_fn ~= nil, "l keymap function should be registered")
+
+-- Select root
+split_state.selected_node_id = s_root.id
+
+-- Press h at root -> should go to Left Child 2
+h_fn(split_state)
+assert(split_state.selected_node_id == lc2.id, "h at root should select Left Child 2")
+
+-- Press h at Left Child 2 -> should go to its child (Left Grandchild 2)
+h_fn(split_state)
+assert(split_state.selected_node_id == lc2.children[1].id, "h at Left Child 2 should select Left Grandchild 2")
+
+-- Press l at Left Grandchild 2 -> should go to parent (Left Child 2)
+l_fn(split_state)
+assert(split_state.selected_node_id == lc2.id, "l at Left Grandchild 2 should select Left Child 2")
+
+-- Press l at Left Child 2 -> should go to parent (Root)
+l_fn(split_state)
+assert(split_state.selected_node_id == s_root.id, "l at Left Child 2 should select Root")
+
+-- Press l at Root -> should go to Right Child 1
+l_fn(split_state)
+assert(split_state.selected_node_id == rc1.id, "l at Root should select Right Child 1")
+
+-- Press l at Right Child 1 -> should go to Right Grandchild 1
+l_fn(split_state)
+assert(split_state.selected_node_id == rc1.children[1].id, "l at Right Child 1 should select Right Grandchild 1")
+
+-- Press h at Right Grandchild 1 -> should go to parent (Right Child 1)
+h_fn(split_state)
+assert(split_state.selected_node_id == rc1.id, "h at Right Grandchild 1 should select Right Child 1")
+
+-- Press h at Right Child 1 -> should go to parent (Root)
+h_fn(split_state)
+assert(split_state.selected_node_id == s_root.id, "h at Right Child 1 should select Root")
+
+print("Split layout tests passed!")
+
+print("----------------------------------------")
 print("ALL TESTS PASSED SUCCESSFULLY!")
 print("----------------------------------------")
+
 
 

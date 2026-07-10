@@ -7,8 +7,8 @@ A lightweight, terminal-native, spatial mindmapping plugin for Neovim written in
 ## Features
 
 - **Bidirectional Outline <-> Map Toggling**: Press `gm` in any `.mm` outline file to project it as a visual tree. Syncs cursor position perfectly between modes.
-- **Vertical & Horizontal (L-to-R) layouts**: Choose between a vertical tree layout (ideal for deep, narrow hierarchies) or a horizontal left-to-right layout (ideal for wide, shallow trees). Toggle dynamically with `gl`.
-- **Adaptive Snapped Navigation**: Snapped directional keys (`h`, `j`, `k`, `l`) adapt on-the-fly to your active layout.
+- **Vertical, Horizontal, & Split layouts**: Choose between a vertical tree layout (ideal for deep hierarchies), a horizontal left-to-right layout (ideal for wide trees), or a split (bilateral) layout that centers the root and distributes children symmetrically. Toggle dynamically with `gl`.
+- **Adaptive Snapped Navigation**: Snapped directional keys (`h`, `j`, `k`, `l`) adapt on-the-fly to your active layout and direction.
 - **Single Scratch Buffer Rendering**: High performance, native scroll/pan support, and pixel-perfect connector lines using box-drawing characters.
 - **Adaptive Theme Highlights**: Node depths link dynamically to your editor's colorscheme highlight groups (`Title`, `String`, `Identifier`, etc.).
 - **Snapped Cursor Navigation**: Cursor automatically snaps to the center of node boxes, locking movement to the tree structure.
@@ -27,7 +27,7 @@ A lightweight, terminal-native, spatial mindmapping plugin for Neovim written in
   config = function()
     require("mindmap").setup({
       -- Default options
-      layout = "vertical", -- or "horizontal"
+      layout = "vertical", -- "vertical", "horizontal", or "split"
     })
   end,
 }
@@ -102,6 +102,32 @@ Press `gm` (or run `:MindmapToggle`) inside the `.mm` buffer. The editor will tr
                                     ╰────────────╯
 ```
 
+#### Split (Bilateral) Layout Result:
+```text
+                                                                         ╭──────────╮
+                                                                      ╭──┤ dot path │
+                                                                      │  ╰──────────╯
+                                                       ╭────────────╮ │
+                                                    ╭──┤ Array proj ├─┤
+                                ╭─────────────────╮ │  ╰────────────╯ │  ╭──────────╮
+                             ╭──┤ Transform block ├─┤                 ╰──┤ wildcard │
+                             │  ╰─────────────────╯ │                    ╰──────────╯
+                             │                      │
+                             │                      │  ╭─────────╮
+                             │                      ╰──┤ Filters │
+                             │                         ╰─────────╯
+  ╭──────────╮               │
+  │ CORS fix ├──╮   ╭────────┴╮ 
+  ╰──────────╯  ├───┤ Try-it  │
+                    ╰────┬────╯
+                         │      ╭───────────╮          ┏━━━━━━━━━━━━┓
+                         ├──────┤ Report UI ├──────────┫ Gherkio v2 ┃
+                         │      ╰───────────╯          ┗━━━━━━━━━━━━┛
+                    ╭────┴─────╮
+                    │Token mask│
+                    ╰──────────╯
+```
+
 ### 3. Controls
 
 #### Outline Mode
@@ -109,7 +135,7 @@ Press `gm` (or run `:MindmapToggle`) inside the `.mm` buffer. The editor will tr
 | Key | Description |
 | :--- | :--- |
 | `gm` | Switch to Map Mode (renders outline as 2D diagram) |
-| `gl` | Toggle default layout mode dynamically between Vertical and Horizontal |
+| `gl` | Toggle default layout mode dynamically (Vertical -> Horizontal -> Split) |
 | `?` | Show floating help popup listing all controls |
 
 #### Map Mode
@@ -117,18 +143,19 @@ Press `gm` (or run `:MindmapToggle`) inside the `.mm` buffer. The editor will tr
 | Key | Description |
 | :--- | :--- |
 | `gm` | Switch back to Outline Mode (returns cursor to the correct line) |
-| `gl` | Toggle layout mode dynamically between Vertical and Horizontal |
+| `gl` | Toggle layout mode dynamically (Vertical -> Horizontal -> Split) |
 | `gy` | Yank the full rendered mindmap to the system clipboard |
-| `h` | Move to left sibling (Vertical) / Move to parent node (Horizontal) |
-| `l` | Move to right sibling (Vertical) / Move to first child node (Horizontal) |
-| `k` | Move up to parent node (Vertical) / Move to upper sibling (Horizontal) |
-| `j` | Move down to first child (Vertical) / Move to lower sibling (Horizontal) |
+| `h` | Move left (parent or child depending on layout/direction) |
+| `l` | Move right (child or parent depending on layout/direction) |
+| `k` | Move up (sibling or parent depending on layout/direction) |
+| `j` | Move down (sibling or child depending on layout/direction) |
 | `i` / `a` / `cc` / `<CR>` | Edit selected node text (opens floating input window) |
 | `o` | Add child node |
 | `O` | Add sibling node |
 | `dd` | Delete selected node and its subtree |
 | `<Tab>` | Indent (make child of previous sibling) |
 | `<S-Tab>` | Outdent (make sibling of parent) |
+| `<Space>` / `za` | Toggle collapse/expand on selected node |
 | `?` | Show floating help popup listing all controls |
 
 ---

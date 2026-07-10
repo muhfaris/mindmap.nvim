@@ -52,17 +52,65 @@ local function draw_node(grid, node, is_selected, layout)
   local tl, tr, bl, br, h, v, p_conn, c_conn
   if is_selected then
     tl, tr, bl, br, h, v = "┏", "┓", "┗", "┛", "━", "┃"
-    if layout == "horizontal" then
+    if layout == "horizontal" or layout == "split" then
       p_conn, c_conn = "┫", "┣"
     else
       p_conn, c_conn = "┻", "┳"
     end
   else
     tl, tr, bl, br, h, v = "╭", "╮", "╰", "╯", "─", "│"
-    if layout == "horizontal" then
+    if layout == "horizontal" or layout == "split" then
       p_conn, c_conn = "┤", "├"
     else
       p_conn, c_conn = "┴", "┬"
+    end
+  end
+
+  local draw_left_conn = false
+  local draw_right_conn = false
+
+  if layout == "horizontal" then
+    if node.parent then
+      draw_left_conn = true
+    end
+    if #node.children > 0 and not node.collapsed then
+      draw_right_conn = true
+    end
+  elseif layout == "split" then
+    if not node.parent then
+      -- Root node
+      local has_left = false
+      local has_right = false
+      for _, child in ipairs(node.children) do
+        if child.direction == "left" then
+          has_left = true
+        else
+          has_right = true
+        end
+      end
+      if has_left and not node.collapsed then
+        draw_left_conn = true
+      end
+      if has_right and not node.collapsed then
+        draw_right_conn = true
+      end
+    else
+      -- Non-root node
+      if node.direction == "left" then
+        if node.parent then
+          draw_right_conn = true
+        end
+        if #node.children > 0 and not node.collapsed then
+          draw_left_conn = true
+        end
+      else
+        if node.parent then
+          draw_left_conn = true
+        end
+        if #node.children > 0 and not node.collapsed then
+          draw_right_conn = true
+        end
+      end
     end
   end
 
@@ -72,22 +120,26 @@ local function draw_node(grid, node, is_selected, layout)
     draw_char(grid, row, c, h)
   end
   draw_char(grid, row, col + w - 1, tr)
-  if layout ~= "horizontal" and node.parent then
+  if layout ~= "horizontal" and layout ~= "split" and node.parent then
     draw_char(grid, row, node.center_col, p_conn)
   end
 
   -- 2. Text line
-  draw_char(grid, row + 1, col, (layout == "horizontal" and node.parent) and p_conn or v)
+  draw_char(grid, row + 1, col, draw_left_conn and p_conn or v)
   for c = col + 1, col + w - 2 do
     draw_char(grid, row + 1, c, " ")
   end
-  draw_char(grid, row + 1, col + w - 1, (layout == "horizontal" and #node.children > 0) and c_conn or v)
+  draw_char(grid, row + 1, col + w - 1, draw_right_conn and c_conn or v)
 
   -- Center the text inside the box
-  local text_len = vim.fn.strdisplaywidth(node.text)
+  local display_text = node.text
+  if node.collapsed and #node.children > 0 then
+    display_text = display_text .. " ⊕"
+  end
+  local text_len = vim.fn.strdisplaywidth(display_text)
   local inner_width = w - 2
   local padding_left = math.floor((inner_width - text_len) / 2)
-  draw_string(grid, row + 1, col + 1 + padding_left, node.text)
+  draw_string(grid, row + 1, col + 1 + padding_left, display_text)
 
   -- 3. Bottom border
   draw_char(grid, row + 2, col, bl)
@@ -95,7 +147,7 @@ local function draw_node(grid, node, is_selected, layout)
     draw_char(grid, row + 2, c, h)
   end
   draw_char(grid, row + 2, col + w - 1, br)
-  if layout ~= "horizontal" and #node.children > 0 then
+  if layout ~= "horizontal" and layout ~= "split" and #node.children > 0 and not node.collapsed then
     draw_char(grid, row + 2, node.center_col, c_conn)
   end
 end
@@ -158,20 +210,21 @@ local function draw_vertical_connectors(grid, node)
 end
 
 -- Draw right-angle connectors for horizontal layout
-local function draw_horizontal_connectors(grid, node)
-  if #node.children == 0 then return end
+local function draw_horizontal_connectors(grid, node, children_list)
+  local children = children_list or node.children
+  if #children == 0 then return end
 
   local parent_right = node.col + node.box_width - 1
   local parent_center_row = node.row + 1
 
-  if #node.children == 1 then
-    local child = node.children[1]
+  if #children == 1 then
+    local child = children[1]
     for c = parent_right + 1, child.col - 1 do
       draw_char(grid, parent_center_row, c, "─")
     end
   else
     local centers = {}
-    for _, child in ipairs(node.children) do
+    for _, child in ipairs(children) do
       table.insert(centers, child.row + 1)
     end
     table.sort(centers)
@@ -191,7 +244,7 @@ local function draw_horizontal_connectors(grid, node)
     end
 
     -- Branch to children
-    for _, child in ipairs(node.children) do
+    for _, child in ipairs(children) do
       local child_center_row = child.row + 1
       for c = branch_col + 1, child.col - 1 do
         draw_char(grid, child_center_row, c, "─")
@@ -199,7 +252,7 @@ local function draw_horizontal_connectors(grid, node)
     end
 
     -- Intersection corners at branch_col
-    for _, child in ipairs(node.children) do
+    for _, child in ipairs(children) do
       local y = child.row + 1
       if y == min_y then
         draw_char(grid, y, branch_col, "╭")
@@ -212,7 +265,7 @@ local function draw_horizontal_connectors(grid, node)
 
     -- Parent meeting vertical branch
     local is_child_at_parent_y = false
-    for _, child in ipairs(node.children) do
+    for _, child in ipairs(children) do
       if child.row + 1 == parent_center_row then
         is_child_at_parent_y = true
         break
@@ -229,6 +282,83 @@ local function draw_horizontal_connectors(grid, node)
       end
     else
       draw_char(grid, parent_center_row, branch_col, "┤")
+    end
+  end
+end
+
+-- Draw right-angle connectors for left-growing horizontal layout
+local function draw_left_horizontal_connectors(grid, node, children_list)
+  local children = children_list or node.children
+  if #children == 0 then return end
+
+  local parent_left = node.col
+  local parent_center_row = node.row + 1
+
+  if #children == 1 then
+    local child = children[1]
+    for c = child.col + child.box_width, parent_left - 1 do
+      draw_char(grid, parent_center_row, c, "─")
+    end
+  else
+    local centers = {}
+    for _, child in ipairs(children) do
+      table.insert(centers, child.row + 1)
+    end
+    table.sort(centers)
+
+    local min_y = centers[1]
+    local max_y = centers[#centers]
+    local branch_col = parent_left - 2
+
+    -- Vertical line branch
+    for r = min_y, max_y do
+      draw_char(grid, r, branch_col, "│")
+    end
+
+    -- Parent to branch
+    for c = branch_col + 1, parent_left - 1 do
+      draw_char(grid, parent_center_row, c, "─")
+    end
+
+    -- Branch to children
+    for _, child in ipairs(children) do
+      local child_center_row = child.row + 1
+      for c = child.col + child.box_width, branch_col - 1 do
+        draw_char(grid, child_center_row, c, "─")
+      end
+    end
+
+    -- Intersection corners at branch_col
+    for _, child in ipairs(children) do
+      local y = child.row + 1
+      if y == min_y then
+        draw_char(grid, y, branch_col, "╮")
+      elseif y == max_y then
+        draw_char(grid, y, branch_col, "╯")
+      else
+        draw_char(grid, y, branch_col, "┤")
+      end
+    end
+
+    -- Parent meeting vertical branch
+    local is_child_at_parent_y = false
+    for _, child in ipairs(children) do
+      if child.row + 1 == parent_center_row then
+        is_child_at_parent_y = true
+        break
+      end
+    end
+
+    if is_child_at_parent_y then
+      if parent_center_row == min_y then
+        draw_char(grid, parent_center_row, branch_col, "┬")
+      elseif parent_center_row == max_y then
+        draw_char(grid, parent_center_row, branch_col, "┴")
+      else
+        draw_char(grid, parent_center_row, branch_col, "┼")
+      end
+    else
+      draw_char(grid, parent_center_row, branch_col, "├")
     end
   end
 end
@@ -285,8 +415,10 @@ local function apply_highlights(bufnr, root, selected_node_id, grid_chars)
         box_cells[r][c] = true
       end
     end
-    for _, child in ipairs(node.children) do
-      mark_box_cells(child)
+    if not node.collapsed then
+      for _, child in ipairs(node.children) do
+        mark_box_cells(child)
+      end
     end
   end
   mark_box_cells(root)
@@ -304,8 +436,10 @@ local function apply_highlights(bufnr, root, selected_node_id, grid_chars)
       end
     end
 
-    for _, child in ipairs(node.children) do
-      traverse_hl(child)
+    if not node.collapsed then
+      for _, child in ipairs(node.children) do
+        traverse_hl(child)
+      end
     end
   end
   traverse_hl(root)
@@ -368,14 +502,40 @@ function M.render_map(bufnr, root, selected_node_id, layout)
   local function traverse_draw(node)
     local is_selected = (node.id == selected_node_id)
     draw_node(grid, node, is_selected, layout)
-    if layout == "horizontal" then
-      draw_horizontal_connectors(grid, node)
-    else
-      draw_vertical_connectors(grid, node)
-    end
+    if not node.collapsed then
+      if layout == "horizontal" or layout == "split" then
+        if node.direction == "left" then
+          draw_left_horizontal_connectors(grid, node)
+        elseif node.direction == "right" then
+          draw_horizontal_connectors(grid, node)
+        else
+          if layout == "split" then
+            local left_children = {}
+            local right_children = {}
+            for _, child in ipairs(node.children) do
+              if child.direction == "left" then
+                table.insert(left_children, child)
+              else
+                table.insert(right_children, child)
+              end
+            end
+            if #left_children > 0 then
+              draw_left_horizontal_connectors(grid, node, left_children)
+            end
+            if #right_children > 0 then
+              draw_horizontal_connectors(grid, node, right_children)
+            end
+          else
+            draw_horizontal_connectors(grid, node)
+          end
+        end
+      else
+        draw_vertical_connectors(grid, node)
+      end
 
-    for _, child in ipairs(node.children) do
-      traverse_draw(child)
+      for _, child in ipairs(node.children) do
+        traverse_draw(child)
+      end
     end
   end
 

@@ -1,0 +1,21 @@
+- Mindmap Split Layout Demonstration
+  - Right Subtree A
+    - A.1 Features
+      - Core Engine
+      - Interactive Input
+      - Keymaps
+    - A.2 Layouts
+      - Vertical
+      - Horizontal
+  - Right Subtree B
+    - B.1 Styling
+      - Theme Integration
+      - Highlight Links
+  - Left Subtree C
+    - C.1 Folding
+      - State Persistence
+      - Node Collapse
+  - Left Subtree D
+    - D.1 Testing
+      - Headless Runner
+      - Assertion Suite

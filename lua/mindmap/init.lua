@@ -106,6 +106,17 @@ local function handle_warnings(state, warnings)
   end
 end
 
+local function transfer_collapsed_states(old_node, new_node)
+  if not old_node or not new_node then return end
+  new_node.collapsed = old_node.collapsed
+  for idx, child in ipairs(new_node.children) do
+    local old_child = old_node.children[idx]
+    if old_child then
+      transfer_collapsed_states(old_child, child)
+    end
+  end
+end
+
 --- Re-parses the tree and redraws while keeping the selected node by path.
 function M.sync_tree_with_path(state, path)
   local lines = require("mindmap.parser").serialize_tree(state.tree)
@@ -115,6 +126,7 @@ function M.sync_tree_with_path(state, path)
 
   local new_tree, new_node_by_id, warnings = require("mindmap.parser").parse_lines(lines)
   if new_tree then
+    transfer_collapsed_states(state.tree, new_tree)
     state.tree = new_tree
     state.node_by_id = new_node_by_id
     handle_warnings(state, warnings)
@@ -156,10 +168,12 @@ function M.toggle_layout()
     return
   end
 
-  if state.layout == "horizontal" then
-    state.layout = "vertical"
-  else
+  if state.layout == "vertical" then
     state.layout = "horizontal"
+  elseif state.layout == "horizontal" then
+    state.layout = "split"
+  else
+    state.layout = "vertical"
   end
 
   if state.mode == "map" then
@@ -290,7 +304,7 @@ function M.setup_map_keymaps(map_buf, src_buf)
   map("gm", function() M.toggle() end, "Switch to outline mode")
 
   -- Layout Toggle
-  map("gl", function() M.toggle_layout() end, "Toggle Layout (vertical <-> horizontal)")
+  map("gl", function() M.toggle_layout() end, "Toggle Layout (vertical -> horizontal -> split)")
 
   -- Yank Map to Clipboard
   map("gy", function(state) M.yank_map(state) end, "Yank/Copy entire mindmap to clipboard")
@@ -300,7 +314,7 @@ function M.setup_map_keymaps(map_buf, src_buf)
 
   -- Navigation (adaptive to layout)
   map("k", function(state)
-    if state.layout == "horizontal" then
+    if state.layout == "horizontal" or state.layout == "split" then
       M.navigate(state, "prev_sibling")
     else
       M.navigate(state, "parent")
@@ -308,7 +322,7 @@ function M.setup_map_keymaps(map_buf, src_buf)
   end, "Navigate parent / prev sibling")
 
   map("j", function(state)
-    if state.layout == "horizontal" then
+    if state.layout == "horizontal" or state.layout == "split" then
       M.navigate(state, "next_sibling")
     else
       M.navigate(state, "child")
@@ -318,18 +332,54 @@ function M.setup_map_keymaps(map_buf, src_buf)
   map("h", function(state)
     if state.layout == "horizontal" then
       M.navigate(state, "parent")
+    elseif state.layout == "split" then
+      local sel = state.node_by_id[state.selected_node_id]
+      if sel then
+        if not sel.parent then
+          -- At root node, go to first left child
+          for _, child in ipairs(sel.children) do
+            if child.direction == "left" then
+              state.selected_node_id = child.id
+              M.redraw(state)
+              break
+            end
+          end
+        elseif sel.direction == "left" then
+          M.navigate(state, "child")
+        else
+          M.navigate(state, "parent")
+        end
+      end
     else
       M.navigate(state, "prev_sibling")
     end
-  end, "Navigate parent / prev sibling")
+  end, "Navigate parent / prev sibling / child")
 
   map("l", function(state)
     if state.layout == "horizontal" then
       M.navigate(state, "child")
+    elseif state.layout == "split" then
+      local sel = state.node_by_id[state.selected_node_id]
+      if sel then
+        if not sel.parent then
+          -- At root node, go to first right child
+          for _, child in ipairs(sel.children) do
+            if child.direction == "right" then
+              state.selected_node_id = child.id
+              M.redraw(state)
+              break
+            end
+          end
+        elseif sel.direction == "left" then
+          M.navigate(state, "parent")
+        else
+          M.navigate(state, "child")
+        end
+      end
     else
       M.navigate(state, "next_sibling")
     end
-  end, "Navigate child / next sibling")
+  end, "Navigate child / next sibling / parent")
 
   -- Structural Actions
   map("o", function(state) M.add_child(state) end, "Create child node")
@@ -337,6 +387,10 @@ function M.setup_map_keymaps(map_buf, src_buf)
   map("dd", function(state) M.delete_node(state) end, "Delete node and subtree")
   map("<Tab>", function(state) M.indent_node(state) end, "Indent node")
   map("<S-Tab>", function(state) M.outdent_node(state) end, "Outdent node")
+
+  -- Collapse/Expand Actions
+  map("<Space>", function(state) M.toggle_collapse(state) end, "Toggle collapse/expand selected node")
+  map("za", function(state) M.toggle_collapse(state) end, "Toggle collapse/expand selected node")
 
   -- Editing Actions
   map("i", function(state) M.edit_node(state) end, "Edit node text")
@@ -401,6 +455,17 @@ function M.navigate(state, dir)
     state.selected_node_id = target.id
     M.redraw(state)
   end
+end
+
+--- Toggle collapse/expand on selected node.
+function M.toggle_collapse(state)
+  local sel = state.node_by_id[state.selected_node_id]
+  if not sel then return end
+  if #sel.children == 0 then
+    return
+  end
+  sel.collapsed = not sel.collapsed
+  M.redraw(state)
 end
 
 --- Edit existing node text via cursor-positioned float.
@@ -814,23 +879,24 @@ function M.show_help()
     " ",
     " Outline Mode Controls: ",
     "   gm          Toggle Mindmap View (Outline <-> Map) ",
-    "   gl          Toggle Mindmap Layout (Vertical <-> Horizontal) ",
+    "   gl          Toggle Mindmap Layout (Vertical -> Horizontal -> Split) ",
     "   ?           Show this help popup ",
     " ",
     " Map Mode Controls: ",
     "   gm          Switch back to Outline Mode ",
-    "   gl          Toggle layout mode (Vertical <-> Horizontal) ",
+    "   gl          Toggle layout mode (Vertical -> Horizontal -> Split) ",
     "   gy          Yank/Copy entire mindmap to clipboard ",
-    "   h           Move to left sibling (Vertical) / Parent (Horizontal) ",
-    "   l           Move to right sibling (Vertical) / Child (Horizontal) ",
-    "   k           Move to parent (Vertical) / Upper sibling (Horizontal) ",
-    "   j           Move to child (Vertical) / Lower sibling (Horizontal) ",
+    "   h           Move left (parent or child depending on layout/direction) ",
+    "   l           Move right (child or parent depending on layout/direction) ",
+    "   k           Move up (sibling or parent depending on layout/direction) ",
+    "   j           Move down (sibling or child depending on layout/direction) ",
     "   i/a/cc/<CR> Edit selected node text (floating input) ",
     "   o           Add child node ",
     "   O           Add sibling node ",
     "   dd          Delete selected node and its subtree ",
     "   <Tab>       Indent node (make child of previous sibling) ",
     "   <S-Tab>     Outdent node (make sibling of parent) ",
+    "   <Space>/za  Toggle collapse/expand selected node ",
     "   ?           Show this help popup ",
     " ",
     " Press q or <Esc> to close this window. ",
