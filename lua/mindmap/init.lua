@@ -1082,7 +1082,7 @@ function M.handle_markdown_autocmds()
         local map_win = vim.fn.bufwinid(state.map_bufnr)
         if map_win == -1 then
           local mode = vim.api.nvim_get_mode().mode
-          if mode:sub(1, 1) ~= "i" then
+          if mode == "n" then
             local cur_win = vim.api.nvim_get_current_win()
             vim.cmd("vsplit")
             local new_win = vim.api.nvim_get_current_win()
