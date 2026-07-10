@@ -15,7 +15,7 @@ local group = vim.api.nvim_create_augroup("Mindmap", { clear = true })
 
 vim.api.nvim_create_autocmd("FileType", {
   group = group,
-  pattern = "mindmap",
+  pattern = { "mindmap", "markdown" },
   callback = function(ev)
     -- Buffer-local toggle command
     vim.api.nvim_buf_create_user_command(ev.buf, "MindmapToggle", function()
@@ -49,5 +49,20 @@ vim.api.nvim_create_autocmd("FileType", {
       silent = true,
       desc = "Show Mindmap Help Popup",
     })
+
+    local ft = vim.api.nvim_get_option_value("filetype", { buf = ev.buf })
+    if ft == "markdown" then
+      local config = require("mindmap").config
+      if config and config.auto_preview then
+        local preview_group = vim.api.nvim_create_augroup("MindmapAutoPreview_" .. ev.buf, { clear = true })
+        vim.api.nvim_create_autocmd({ "CursorMoved", "TextChanged", "TextChangedI" }, {
+          group = preview_group,
+          buffer = ev.buf,
+          callback = function()
+            require("mindmap").handle_markdown_autocmds()
+          end,
+        })
+      end
+    end
   end,
 })

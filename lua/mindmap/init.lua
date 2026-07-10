@@ -4,6 +4,7 @@ M.states = {} -- bufnr -> state table
 
 M.config = {
   layout = "vertical",
+  auto_preview = false,
 }
 
 function M.setup(opts)
@@ -11,6 +12,30 @@ function M.setup(opts)
   if M.config.layout then
     vim.g.mindmap_layout = M.config.layout
   end
+end
+
+local function find_mindmap_block(buf, cursor_line)
+  local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+  local inside = false
+  local current_start = nil
+
+  for i, line in ipairs(lines) do
+    if not inside then
+      if line:match("^%s*```mindmap%s*") then
+        inside = true
+        current_start = i
+      end
+    else
+      if line:match("^%s*```%s*$") then
+        if cursor_line >= current_start and cursor_line <= i then
+          return current_start, i
+        end
+        inside = false
+        current_start = nil
+      end
+    end
+  end
+  return nil, nil
 end
 
 local is_snapping = false
@@ -121,7 +146,12 @@ end
 function M.sync_tree_with_path(state, path)
   local lines = require("mindmap.parser").serialize_tree(state.tree)
   if vim.api.nvim_buf_is_valid(state.src_buf) then
-    vim.api.nvim_buf_set_lines(state.src_buf, 0, -1, false, lines)
+    if state.is_markdown and state.start_line and state.end_line then
+      vim.api.nvim_buf_set_lines(state.src_buf, state.start_line, state.end_line - 1, false, lines)
+      state.end_line = state.start_line + #lines + 1
+    else
+      vim.api.nvim_buf_set_lines(state.src_buf, 0, -1, false, lines)
+    end
   end
 
   local new_tree, new_node_by_id, warnings = require("mindmap.parser").parse_lines(lines)
@@ -220,7 +250,28 @@ function M.toggle()
   if state.mode == "outline" and not is_in_map then
     -- Toggle to MAP mode
     local lines = vim.api.nvim_buf_get_lines(state.src_buf, 0, -1, false)
-    local tree, node_by_id, warnings = require("mindmap.parser").parse_lines(lines)
+    local cursor_line = vim.api.nvim_win_get_cursor(0)[1]
+
+    local ft = vim.api.nvim_get_option_value("filetype", { buf = state.src_buf })
+    state.is_markdown = (ft == "markdown")
+
+    local block_lines = {}
+    if state.is_markdown then
+      local start_line, end_line = find_mindmap_block(state.src_buf, cursor_line)
+      if not start_line then
+        vim.notify("Cursor must be inside a ```mindmap block to toggle mindmap", vim.log.levels.WARN)
+        return
+      end
+      state.start_line = start_line
+      state.end_line = end_line
+      for i = start_line + 1, end_line - 1 do
+        table.insert(block_lines, lines[i])
+      end
+    else
+      block_lines = lines
+    end
+
+    local tree, node_by_id, warnings = require("mindmap.parser").parse_lines(block_lines)
     if not tree then
       vim.notify("Empty outline, cannot show map", vim.log.levels.WARN)
       return
@@ -232,12 +283,18 @@ function M.toggle()
     handle_warnings(state, warnings)
 
     -- Find matching selected node based on cursor position in outline
-    local cursor_line = vim.api.nvim_win_get_cursor(0)[1]
     local selected_node = nil
     for _, node in pairs(node_by_id) do
-      if node.line_num == cursor_line then
-        selected_node = node
-        break
+      if state.is_markdown and state.start_line then
+        if node.line_num == cursor_line - state.start_line then
+          selected_node = node
+          break
+        end
+      else
+        if node.line_num == cursor_line then
+          selected_node = node
+          break
+        end
       end
     end
     if not selected_node then
@@ -276,7 +333,12 @@ function M.toggle()
 
     -- Serialize tree back to lines
     local lines = require("mindmap.parser").serialize_tree(state.tree)
-    vim.api.nvim_buf_set_lines(state.src_buf, 0, -1, false, lines)
+    if state.is_markdown and state.start_line and state.end_line then
+      vim.api.nvim_buf_set_lines(state.src_buf, state.start_line, state.end_line - 1, false, lines)
+      state.end_line = state.start_line + #lines + 1
+    else
+      vim.api.nvim_buf_set_lines(state.src_buf, 0, -1, false, lines)
+    end
 
     state.mode = "outline"
 
@@ -286,7 +348,12 @@ function M.toggle()
     -- Place cursor on matching outline line
     local sel = state.node_by_id[state.selected_node_id]
     if sel and sel.line_num then
-      vim.api.nvim_win_set_cursor(0, { math.min(#lines, sel.line_num), 0 })
+      if state.is_markdown and state.start_line then
+        local target_line = state.start_line + sel.line_num
+        vim.api.nvim_win_set_cursor(0, { math.min(vim.api.nvim_buf_line_count(state.src_buf), target_line), 0 })
+      else
+        vim.api.nvim_win_set_cursor(0, { math.min(#lines, sel.line_num), 0 })
+      end
     end
   end
 end
@@ -943,6 +1010,115 @@ function M.show_help()
   vim.keymap.set("n", "q", close, { buffer = buf, silent = true })
   vim.keymap.set("n", "<Esc>", close, { buffer = buf, silent = true })
   vim.keymap.set("n", "?", close, { buffer = buf, silent = true })
+end
+
+local is_handling_autocmd = false
+function M.handle_markdown_autocmds()
+  if is_handling_autocmd then return end
+  is_handling_autocmd = true
+  local success, err = pcall(function()
+    local src_buf = vim.api.nvim_get_current_buf()
+    local cursor_line = vim.api.nvim_win_get_cursor(0)[1]
+    local start_line, end_line = find_mindmap_block(src_buf, cursor_line)
+
+    if start_line and end_line then
+      local state = M.states[src_buf]
+      if not state then
+        state = {
+          src_buf = src_buf,
+          mode = "outline",
+          map_bufnr = nil,
+          tree = nil,
+          selected_node_id = nil,
+          node_by_id = {},
+          layout = vim.g.mindmap_layout or M.config.layout or "vertical",
+          is_markdown = true,
+        }
+        M.states[src_buf] = state
+      end
+
+      state.start_line = start_line
+      state.end_line = end_line
+
+      local lines = vim.api.nvim_buf_get_lines(src_buf, 0, -1, false)
+      local block_lines = {}
+      for i = start_line + 1, end_line - 1 do
+        table.insert(block_lines, lines[i])
+      end
+
+      local tree, node_by_id, warnings = require("mindmap.parser").parse_lines(block_lines)
+      if tree then
+        state.tree = tree
+        state.node_by_id = node_by_id
+
+        -- Find node corresponding to cursor line in outline
+        local relative_line = cursor_line - start_line
+        local selected_id = nil
+        for id, node in pairs(node_by_id) do
+          if node.line_num == relative_line then
+            selected_id = id
+            break
+          end
+        end
+
+        if not selected_id then
+          selected_id = tree.id
+        end
+        state.selected_node_id = selected_id
+
+        -- Ensure map buffer exists
+        if not state.map_bufnr or not vim.api.nvim_buf_is_valid(state.map_bufnr) then
+          state.map_bufnr = vim.api.nvim_create_buf(false, true)
+          vim.api.nvim_buf_set_name(state.map_bufnr, "mindmap://map/" .. src_buf)
+          vim.api.nvim_set_option_value("buftype", "nofile", { buf = state.map_bufnr })
+          vim.api.nvim_set_option_value("bufhidden", "wipe", { buf = state.map_bufnr })
+          vim.api.nvim_set_option_value("swapfile", false, { buf = state.map_bufnr })
+          vim.api.nvim_set_option_value("filetype", "mindmap", { buf = state.map_bufnr })
+          M.setup_map_autocmds(state.map_bufnr, src_buf)
+          M.setup_map_keymaps(state.map_bufnr, src_buf)
+        end
+
+        -- Check if map window exists
+        local map_win = vim.fn.bufwinid(state.map_bufnr)
+        if map_win == -1 then
+          local mode = vim.api.nvim_get_mode().mode
+          if mode:sub(1, 1) ~= "i" then
+            local cur_win = vim.api.nvim_get_current_win()
+            vim.cmd("vsplit")
+            local new_win = vim.api.nvim_get_current_win()
+            vim.api.nvim_win_set_buf(new_win, state.map_bufnr)
+            vim.api.nvim_set_option_value("number", false, { win = new_win })
+            vim.api.nvim_set_option_value("relativenumber", false, { win = new_win })
+            vim.api.nvim_set_option_value("wrap", false, { win = new_win })
+            vim.api.nvim_set_current_win(cur_win)
+            map_win = new_win
+          end
+        end
+
+        -- Render the map
+        require("mindmap.render").render_map(state.map_bufnr, state.tree, state.selected_node_id, state.layout)
+
+        -- Position map cursor on the selected node
+        local sel = state.node_by_id[state.selected_node_id]
+        if sel and map_win ~= -1 then
+          vim.api.nvim_win_set_cursor(map_win, { sel.row + 1, sel.center_col - 1 })
+        end
+      end
+    else
+      -- Close preview window if open
+      local state = M.states[src_buf]
+      if state and state.map_bufnr and vim.api.nvim_buf_is_valid(state.map_bufnr) then
+        local map_win = vim.fn.bufwinid(state.map_bufnr)
+        if map_win ~= -1 then
+          vim.api.nvim_win_close(map_win, true)
+        end
+      end
+    end
+  end)
+  is_handling_autocmd = false
+  if not success then
+    error(err)
+  end
 end
 
 return M

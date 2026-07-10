@@ -1,12 +1,17 @@
 -- Headless tests for mindmap.nvim
--- Run with: nvim --headless -c "set rtp+=." -c "luafile lua/mindmap/test.lua" -c "qa!"
+-- Run with: nvim --headless -c "set rtp^=." -c "luafile lua/mindmap/test.lua" -c "qa!"
 
-package.loaded["mindmap"] = nil
-package.loaded["mindmap.parser"] = nil
-package.loaded["mindmap.layout"] = nil
-package.loaded["mindmap.render"] = nil
+-- Force load local files first to bypass Neovim global package cache
+local parser = dofile("lua/mindmap/parser.lua")
+package.loaded["mindmap.parser"] = parser
 
-local parser = require("mindmap.parser")
+local layout = dofile("lua/mindmap/layout.lua")
+package.loaded["mindmap.layout"] = layout
+
+local render = dofile("lua/mindmap/render.lua")
+package.loaded["mindmap.render"] = render
+
+package.loaded["mindmap"] = dofile("lua/mindmap/init.lua")
 local layout = require("mindmap.layout")
 
 local test_lines = {
@@ -210,8 +215,8 @@ print("Anchor/link reference tests passed!")
 print("----------------------------------------")
 print("Running state operations tests...")
 
-package.loaded["mindmap"] = nil
-local init = require("mindmap")
+package.loaded["mindmap"] = dofile("lua/mindmap/init.lua")
+local init = package.loaded["mindmap"]
 print("Loaded mindmap path:", vim.api.nvim_get_runtime_file("lua/mindmap/init.lua", true)[1])
 print("init.toggle_collapse:", tostring(init.toggle_collapse))
 
@@ -686,6 +691,7 @@ local redraw_called = 0
 init.redraw = function() redraw_called = redraw_called + 1 end
 
 -- At root, pressing 'h' should select first left child (Left Child 2)
+local split_get_buf = vim.api.nvim_get_current_buf
 vim.api.nvim_get_current_buf = function() return 999 end
 init.states[999] = split_state
 
@@ -742,7 +748,237 @@ assert(split_state.selected_node_id == rc1.id, "h at Right Grandchild 1 should s
 h_fn(split_state)
 assert(split_state.selected_node_id == s_root.id, "h at Right Child 1 should select Root")
 
+vim.api.nvim_get_current_buf = split_get_buf
+
 print("Split layout tests passed!")
+
+print("----------------------------------------")
+print("Running markdown code block tests...")
+
+local md_lines = {}
+for line in io.lines("tests/markdown_test.md") do
+  table.insert(md_lines, line)
+end
+
+local md_buf = vim.api.nvim_create_buf(false, true)
+vim.api.nvim_buf_set_lines(md_buf, 0, -1, false, md_lines)
+vim.api.nvim_set_option_value("filetype", "markdown", { buf = md_buf })
+
+-- Mock nvim_get_current_buf to return md_buf
+local old_get_buf = vim.api.nvim_get_current_buf
+vim.api.nvim_get_current_buf = function() return md_buf end
+
+-- Mock window cursor
+local old_win_get_cursor = vim.api.nvim_win_get_cursor
+local old_win_set_cursor = vim.api.nvim_win_set_cursor
+local mock_cursor = { 5, 0 } -- Cursor on "- Child 1" (line 5, 1-indexed)
+vim.api.nvim_win_get_cursor = function(win) return mock_cursor end
+vim.api.nvim_win_set_cursor = function(win, pos) mock_cursor = pos end
+
+-- Mock window buffer setting
+local old_win_set_buf = vim.api.nvim_win_set_buf
+vim.api.nvim_win_set_buf = function(win, buf) end
+
+-- Mock render_map to compute node coordinates (row, col)
+local old_render = require("mindmap.render").render_map
+require("mindmap.render").render_map = function(buf, tree, sel_id, layout_mode)
+  require("mindmap.layout").compute_layout(tree, {
+    layout = layout_mode or "vertical",
+    row_gap = 4,
+    col_gap = 4,
+    sibling_gap = 2,
+    margin = 2,
+  })
+end
+
+-- Trigger toggle to MAP mode
+init.toggle()
+
+-- Verify state
+local state = init.states[md_buf]
+assert(state ~= nil, "State should be initialized for md_buf")
+assert(state.is_markdown == true, "Should detect markdown filetype")
+assert(state.start_line == 3, "Start line of code block should be 3")
+assert(state.end_line == 7, "End line of code block should be 7")
+
+-- Add a child node under the selected node (Child 1)
+local child1_node = state.node_by_id[state.selected_node_id]
+assert(child1_node.text == "Child 1", "Selected node should be Child 1, got: " .. tostring(child1_node.text))
+
+-- Add child to Child 1
+init.add_child(state)
+
+-- Verify that the buffer was updated correctly
+local updated_lines = vim.api.nvim_buf_get_lines(md_buf, 0, -1, false)
+
+assert(updated_lines[1] == "# Markdown Title", "Should not alter preceding markdown text")
+assert(updated_lines[2] == "Some paragraph text.", "Should not alter preceding markdown text")
+assert(updated_lines[3] == "```mindmap", "Should not alter opening fence")
+assert(updated_lines[4] == "- Root Node", "Line 4 mismatch: " .. tostring(updated_lines[4]))
+assert(updated_lines[5] == "  - Child 1", "Line 5 mismatch: " .. tostring(updated_lines[5]))
+assert(updated_lines[6] == "    - New Node", "Line 6 mismatch: " .. tostring(updated_lines[6]))
+assert(updated_lines[7] == "  - Child 2", "Line 7 mismatch: " .. tostring(updated_lines[7]))
+assert(updated_lines[8] == "```", "Should not alter closing fence")
+assert(updated_lines[9] == "Other markdown text.", "Should not alter trailing markdown text")
+
+-- Verify new end_line is recalculated correctly
+assert(state.end_line == 8, "End line should be updated to 8, got: " .. tostring(state.end_line))
+
+-- Toggle back to OUTLINE mode
+init.toggle()
+assert(state.mode == "outline", "Should toggle back to outline mode")
+
+-- Verify cursor position after toggle back (should point to New Node, line 6)
+assert(mock_cursor[1] == 6, "Cursor should be on New Node, line 6, got: " .. mock_cursor[1])
+
+-- Clean up mock functions
+vim.api.nvim_get_current_buf = old_get_buf
+vim.api.nvim_win_get_cursor = old_win_get_cursor
+vim.api.nvim_win_set_cursor = old_win_set_cursor
+vim.api.nvim_win_set_buf = old_win_set_buf
+require("mindmap.render").render_map = old_render
+vim.api.nvim_buf_delete(md_buf, { force = true })
+
+print("Markdown code block tests passed!")
+
+print("----------------------------------------")
+print("Running markdown auto-preview tests...")
+
+-- Enable auto_preview
+init.config.auto_preview = true
+
+local md_lines = {}
+for line in io.lines("tests/markdown_test.md") do
+  table.insert(md_lines, line)
+end
+
+local md_buf = vim.api.nvim_create_buf(false, true)
+vim.api.nvim_buf_set_lines(md_buf, 0, -1, false, md_lines)
+vim.api.nvim_set_option_value("filetype", "markdown", { buf = md_buf })
+
+local mock_win = 100
+local mock_map_win = -1
+local vsplit_called = false
+local win_close_called = false
+
+local old_get_buf = vim.api.nvim_get_current_buf
+local old_get_win = vim.api.nvim_get_current_win
+local old_set_win = vim.api.nvim_set_current_win
+local old_win_set_buf = vim.api.nvim_win_set_buf
+local old_bufwinid = vim.fn.bufwinid
+local old_cmd = vim.cmd
+local old_win_close = vim.api.nvim_win_close
+local old_win_get_cursor = vim.api.nvim_win_get_cursor
+local old_win_set_cursor = vim.api.nvim_win_set_cursor
+local old_set_option_value = vim.api.nvim_set_option_value
+
+vim.api.nvim_get_current_buf = function() return md_buf end
+vim.api.nvim_get_current_win = function() return mock_win end
+vim.api.nvim_set_current_win = function(win)
+  mock_win = win
+end
+vim.api.nvim_win_set_buf = function(win, buf)
+  -- do nothing mock
+end
+vim.api.nvim_set_option_value = function(name, val, opts)
+  if opts and opts.win and (opts.win == 100 or opts.win == 101) then
+    return
+  end
+  return old_set_option_value(name, val, opts)
+end
+vim.fn.bufwinid = function(buf)
+  local state = init.states[md_buf]
+  if state and buf == state.map_bufnr then
+    return mock_map_win
+  end
+  return -1
+end
+vim.cmd = function(cmd)
+  if cmd == "vsplit" then
+    vsplit_called = true
+    mock_map_win = 101
+    return
+  end
+  return old_cmd(cmd)
+end
+vim.api.nvim_win_close = function(win, force)
+  if win == mock_map_win then
+    win_close_called = true
+    mock_map_win = -1
+    return
+  end
+  return old_win_close(win, force)
+end
+vim.api.nvim_win_set_cursor = function(win, pos)
+  -- mock set cursor
+end
+
+-- Mock renderer to avoid actual screen rendering side effects
+local old_render = require("mindmap.render").render_map
+require("mindmap.render").render_map = function(buf, tree, sel_id, layout_mode)
+  require("mindmap.layout").compute_layout(tree, {
+    layout = layout_mode,
+    sibling_gap = 2,
+    margin = 2,
+  })
+end
+
+-- Test 1: Cursor outside any ```mindmap block -> should not open split
+local mock_cursor = { 1, 0 }
+vim.api.nvim_win_get_cursor = function(win) return mock_cursor end
+
+init.handle_markdown_autocmds()
+assert(not vsplit_called, "Should not vsplit when cursor is outside code block")
+assert(mock_map_win == -1, "Map window should not be open")
+
+-- Test 2: Move cursor inside ```mindmap block -> should open split and render
+mock_cursor = { 4, 0 } -- "- Root Node" is line 4
+init.handle_markdown_autocmds()
+assert(vsplit_called, "Should vsplit when cursor enters code block")
+assert(mock_map_win == 101, "Map window should be open")
+
+local state = init.states[md_buf]
+assert(state ~= nil, "State should be initialized")
+assert(state.selected_node_id ~= nil, "Should have a selected node")
+
+-- Reset mock tracking variables
+vsplit_called = false
+win_close_called = false
+
+-- Test 3: Move cursor within block -> should update but NOT vsplit again
+mock_cursor = { 5, 0 } -- "  - Child 1" is line 5
+init.handle_markdown_autocmds()
+assert(not vsplit_called, "Should not vsplit again if window is already open")
+assert(mock_map_win == 101, "Map window should remain open")
+
+-- Test 4: Move cursor outside block -> should close split
+mock_cursor = { 9, 0 } -- "Other markdown text." is line 9
+init.handle_markdown_autocmds()
+assert(win_close_called, "Should close map window when cursor leaves block")
+assert(mock_map_win == -1, "Map window should be closed")
+
+-- Clean up mocks
+vim.api.nvim_get_current_buf = old_get_buf
+vim.api.nvim_get_current_win = old_get_win
+vim.api.nvim_set_current_win = old_set_win
+vim.api.nvim_win_set_buf = old_win_set_buf
+vim.api.nvim_set_option_value = old_set_option_value
+vim.fn.bufwinid = old_bufwinid
+vim.cmd = old_cmd
+vim.api.nvim_win_close = old_win_close
+vim.api.nvim_win_get_cursor = old_win_get_cursor
+vim.api.nvim_win_set_cursor = old_win_set_cursor
+require("mindmap.render").render_map = old_render
+
+if state and state.map_bufnr and vim.api.nvim_buf_is_valid(state.map_bufnr) then
+  vim.api.nvim_buf_delete(state.map_bufnr, { force = true })
+end
+vim.api.nvim_buf_delete(md_buf, { force = true })
+
+-- Disable auto_preview
+init.config.auto_preview = false
+
+print("Markdown auto-preview tests passed!")
 
 print("----------------------------------------")
 print("ALL TESTS PASSED SUCCESSFULLY!")
