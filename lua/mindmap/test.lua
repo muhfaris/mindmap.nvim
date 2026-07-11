@@ -799,7 +799,7 @@ local state = init.states[md_buf]
 assert(state ~= nil, "State should be initialized for md_buf")
 assert(state.is_markdown == true, "Should detect markdown filetype")
 assert(state.start_line == 3, "Start line of code block should be 3")
-assert(state.end_line == 7, "End line of code block should be 7")
+assert(state.end_line == 10, "End line of code block should be 10")
 
 -- Add a child node under the selected node (Child 1)
 local child1_node = state.node_by_id[state.selected_node_id]
@@ -816,20 +816,23 @@ assert(updated_lines[2] == "Some paragraph text.", "Should not alter preceding m
 assert(updated_lines[3] == "```mindmap", "Should not alter opening fence")
 assert(updated_lines[4] == "- Root Node", "Line 4 mismatch: " .. tostring(updated_lines[4]))
 assert(updated_lines[5] == "  - Child 1", "Line 5 mismatch: " .. tostring(updated_lines[5]))
-assert(updated_lines[6] == "    - New Node", "Line 6 mismatch: " .. tostring(updated_lines[6]))
-assert(updated_lines[7] == "  - Child 2", "Line 7 mismatch: " .. tostring(updated_lines[7]))
-assert(updated_lines[8] == "```", "Should not alter closing fence")
-assert(updated_lines[9] == "Other markdown text.", "Should not alter trailing markdown text")
+assert(updated_lines[6] == "    - Child 1", "Line 6 mismatch: " .. tostring(updated_lines[6]))
+assert(updated_lines[7] == "    - New Node", "Line 7 mismatch: " .. tostring(updated_lines[7]))
+assert(updated_lines[8] == "  - Child 2", "Line 8 mismatch: " .. tostring(updated_lines[8]))
+assert(updated_lines[9] == "    - Child 1", "Line 9 mismatch: " .. tostring(updated_lines[9]))
+assert(updated_lines[10] == "    - Child 1", "Line 10 mismatch: " .. tostring(updated_lines[10]))
+assert(updated_lines[11] == "```", "Should not alter closing fence")
+assert(updated_lines[12] == "Other markdown text.", "Should not alter trailing markdown text")
 
 -- Verify new end_line is recalculated correctly
-assert(state.end_line == 8, "End line should be updated to 8, got: " .. tostring(state.end_line))
+assert(state.end_line == 11, "End line should be updated to 11, got: " .. tostring(state.end_line))
 
 -- Toggle back to OUTLINE mode
 init.toggle()
 assert(state.mode == "outline", "Should toggle back to outline mode")
 
--- Verify cursor position after toggle back (should point to New Node, line 6)
-assert(mock_cursor[1] == 6, "Cursor should be on New Node, line 6, got: " .. mock_cursor[1])
+-- Verify cursor position after toggle back (should point to New Node, line 7)
+assert(mock_cursor[1] == 7, "Cursor should be on New Node, line 7, got: " .. mock_cursor[1])
 
 -- Clean up mock functions
 vim.api.nvim_get_current_buf = old_get_buf
@@ -952,7 +955,7 @@ assert(not vsplit_called, "Should not vsplit again if window is already open")
 assert(mock_map_win == 101, "Map window should remain open")
 
 -- Test 4: Move cursor outside block -> should close split
-mock_cursor = { 9, 0 } -- "Other markdown text." is line 9
+mock_cursor = { 11, 0 } -- "Other markdown text." is line 11
 init.handle_markdown_autocmds()
 assert(win_close_called, "Should close map window when cursor leaves block")
 assert(mock_map_win == -1, "Map window should be closed")

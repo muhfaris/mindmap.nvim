@@ -5,6 +5,7 @@ M.states = {} -- bufnr -> state table
 M.config = {
   layout = "vertical",
   auto_preview = false,
+  preview_width = nil,
 }
 
 function M.setup(opts)
@@ -358,6 +359,49 @@ function M.toggle()
   end
 end
 
+--- Toggles the floating preview window between its original size and full-screen.
+function M.toggle_preview_size(state)
+  local map_win = vim.fn.bufwinid(state.map_bufnr)
+  if map_win == -1 then return end
+  local ok, config = pcall(vim.api.nvim_win_get_config, map_win)
+  if not ok or config.relative == "" then
+    -- Not a floating window, nothing to toggle
+    return
+  end
+
+  -- Save current dimension state if not already saved, or retrieve it
+  if not state.orig_float_config then
+    state.orig_float_config = {
+      width = config.width,
+      height = config.height,
+      row = config.row,
+      col = config.col,
+    }
+  end
+
+  -- Check if currently maximized/full screen.
+  -- We allow a small margin or check if width is close to columns.
+  if config.width >= vim.o.columns - 4 then
+    -- Restore original size
+    vim.api.nvim_win_set_config(map_win, {
+      relative = config.relative,
+      width = state.orig_float_config.width,
+      height = state.orig_float_config.height,
+      row = state.orig_float_config.row,
+      col = state.orig_float_config.col,
+    })
+  else
+    -- Maximize to full screen (with small margins for borders)
+    vim.api.nvim_win_set_config(map_win, {
+      relative = config.relative,
+      width = vim.o.columns - 4,
+      height = vim.o.lines - 4,
+      row = 1,
+      col = 2,
+    })
+  end
+end
+
 --- Configures the map buffer local keymaps.
 function M.setup_map_keymaps(map_buf, src_buf)
   local function map(key, fn, desc)
@@ -372,6 +416,9 @@ function M.setup_map_keymaps(map_buf, src_buf)
 
   -- Layout Toggle
   map("gl", function() M.toggle_layout() end, "Toggle Layout (vertical -> horizontal -> split)")
+
+  -- Toggle full screen
+  map("gf", function(state) M.toggle_preview_size(state) end, "Toggle preview full screen")
 
   -- Yank Map to Clipboard
   map("gy", function(state) M.yank_map(state) end, "Yank/Copy entire mindmap to clipboard")
@@ -1013,6 +1060,38 @@ function M.show_help()
 end
 
 local is_handling_autocmd = false
+
+--- Closes the markdown floating preview window if open and restores parent width.
+function M.close_preview(src_buf)
+  local state = M.states[src_buf]
+  if state and state.map_bufnr and vim.api.nvim_buf_is_valid(state.map_bufnr) then
+    local map_win = vim.fn.bufwinid(state.map_bufnr)
+    if map_win ~= -1 then
+      -- Save current dimensions/position before closing
+      local ok, win_config = pcall(vim.api.nvim_win_get_config, map_win)
+      if ok and win_config.relative ~= "" then
+        state.last_preview_width = vim.api.nvim_win_get_width(map_win)
+        state.last_preview_height = vim.api.nvim_win_get_height(map_win)
+        local col = win_config.col
+        if type(col) == "table" then col = col[1] or col end
+        local row = win_config.row
+        if type(row) == "table" then row = row[1] or row end
+        state.last_preview_row = row
+        state.last_preview_col = col
+      end
+      pcall(vim.api.nvim_win_close, map_win, true)
+    end
+  end
+  -- Restore note window width if it was split
+  if state and state.orig_note_win_width then
+    local note_win = vim.fn.bufwinid(src_buf)
+    if note_win ~= -1 and vim.api.nvim_win_is_valid(note_win) then
+      pcall(vim.api.nvim_win_set_config, note_win, { width = state.orig_note_win_width })
+    end
+    state.orig_note_win_width = nil
+  end
+end
+
 function M.handle_markdown_autocmds()
   if is_handling_autocmd then return end
   is_handling_autocmd = true
@@ -1084,14 +1163,124 @@ function M.handle_markdown_autocmds()
           local mode = vim.api.nvim_get_mode().mode
           if mode == "n" then
             local cur_win = vim.api.nvim_get_current_win()
-            vim.cmd("vsplit")
-            local new_win = vim.api.nvim_get_current_win()
-            vim.api.nvim_win_set_buf(new_win, state.map_bufnr)
-            vim.api.nvim_set_option_value("number", false, { win = new_win })
-            vim.api.nvim_set_option_value("relativenumber", false, { win = new_win })
-            vim.api.nvim_set_option_value("wrap", false, { win = new_win })
-            vim.api.nvim_set_current_win(cur_win)
-            map_win = new_win
+            local ok, win_config = pcall(vim.api.nvim_win_get_config, cur_win)
+             if ok and win_config.relative ~= "" then
+              -- Calculate actual mindmap width
+              local layout_opts = {
+                layout = state.layout or "vertical",
+                row_gap = 4,
+                col_gap = 4,
+                sibling_gap = 2,
+                margin = 2,
+              }
+              local _, max_col = require("mindmap.layout").compute_layout(state.tree, layout_opts)
+              local content_width = (max_col or 0) + 4
+
+              -- The active note editor is in a float window. Open the preview as a float next to it.
+              local preview_width = state.last_preview_width or M.config.preview_width or content_width
+              if preview_width < 40 then
+                preview_width = 40
+              end
+              local preview_height = state.last_preview_height or win_config.height
+
+              local parent_row = win_config.row
+              if type(parent_row) == "table" then parent_row = parent_row[1] or parent_row end
+              local parent_col = win_config.col
+              if type(parent_col) == "table" then parent_col = parent_col[1] or parent_col end
+
+              local debug_file = io.open("/tmp/mindmap_layout_debug.log", "a")
+              if debug_file then
+                debug_file:write(string.format("cur_win: %d\n", cur_win))
+                debug_file:write(string.format("win_config: width=%s, height=%s, row=%s, col=%s, relative=%s\n",
+                  tostring(win_config.width), tostring(win_config.height), tostring(win_config.row), tostring(win_config.col), tostring(win_config.relative)))
+                debug_file:write(string.format("preview_width: %s, preview_height: %s\n", tostring(preview_width), tostring(preview_height)))
+              end
+
+              local min_note_width = 30
+              if win_config.width - preview_width - 1 >= min_note_width then
+                -- 1. Split inside the float!
+                state.orig_note_win_width = win_config.width
+                local resized_note_width = win_config.width - preview_width - 1
+                vim.api.nvim_win_set_config(cur_win, { width = resized_note_width })
+
+                local float_opts = {
+                  relative = "editor",
+                  width = preview_width,
+                  height = win_config.height,
+                  row = parent_row,
+                  col = parent_col + resized_note_width + 1,
+                  style = "minimal",
+                  border = "rounded",
+                  title = " Mindmap Preview ",
+                  title_pos = "center",
+                }
+                if debug_file then
+                  debug_file:write("Chose Option 1 (Split inside float)\n")
+                  debug_file:write(string.format("float_opts: row=%s, col=%s, relative=%s\n",
+                    tostring(float_opts.row), tostring(float_opts.col), tostring(float_opts.relative)))
+                end
+                local new_win = vim.api.nvim_open_win(state.map_bufnr, false, float_opts)
+                vim.api.nvim_set_option_value("number", false, { win = new_win })
+                vim.api.nvim_set_option_value("relativenumber", false, { win = new_win })
+                vim.api.nvim_set_option_value("wrap", false, { win = new_win })
+                map_win = new_win
+              else
+                -- 2. Fall back to separate floating window next to the note window
+                local preview_col = state.last_preview_col or (parent_col + win_config.width + 2)
+                local preview_row = state.last_preview_row or parent_row
+
+                preview_width = math.min(preview_width, vim.o.columns - 4)
+                preview_height = math.min(preview_height, vim.o.lines - 4)
+
+                if not state.last_preview_col then
+                  if preview_col + preview_width > vim.o.columns then
+                    preview_col = math.max(0, parent_col - preview_width - 2)
+                  end
+                else
+                  preview_col = math.max(0, math.min(preview_col, vim.o.columns - preview_width - 2))
+                  preview_row = math.max(0, math.min(preview_row, vim.o.lines - preview_height - 2))
+                end
+
+                local float_opts = {
+                  relative = "editor",
+                  width = preview_width,
+                  height = preview_height,
+                  row = preview_row,
+                  col = preview_col,
+                  style = "minimal",
+                  border = "rounded",
+                  title = " Mindmap Preview ",
+                  title_pos = "center",
+                }
+                if debug_file then
+                  debug_file:write("Chose Option 2 (Fallback float)\n")
+                  debug_file:write(string.format("float_opts: row=%s, col=%s, relative=%s\n",
+                    tostring(float_opts.row), tostring(float_opts.col), tostring(float_opts.relative)))
+                end
+                local new_win = vim.api.nvim_open_win(state.map_bufnr, false, float_opts)
+                vim.api.nvim_set_option_value("number", false, { win = new_win })
+                vim.api.nvim_set_option_value("relativenumber", false, { win = new_win })
+                vim.api.nvim_set_option_value("wrap", false, { win = new_win })
+                map_win = new_win
+              end
+              if debug_file then
+                local note_pos = vim.api.nvim_win_get_position(cur_win)
+                local preview_pos = vim.api.nvim_win_get_position(map_win)
+                debug_file:write(string.format("Final Positions: note_pos={%d, %d}, preview_pos={%d, %d}\n\n",
+                  note_pos[1], note_pos[2], preview_pos[1], preview_pos[2]))
+                debug_file:close()
+              end
+            else
+              -- Normal tiled vsplit
+              vim.cmd("vsplit")
+              local new_win = vim.api.nvim_get_current_win()
+              vim.api.nvim_win_set_buf(new_win, state.map_bufnr)
+              vim.api.nvim_set_option_value("number", false, { win = new_win })
+              vim.api.nvim_set_option_value("relativenumber", false, { win = new_win })
+              vim.api.nvim_set_option_value("wrap", false, { win = new_win })
+              vim.api.nvim_set_current_win(cur_win)
+              map_win = new_win
+            end
           end
         end
 
@@ -1106,13 +1295,7 @@ function M.handle_markdown_autocmds()
       end
     else
       -- Close preview window if open
-      local state = M.states[src_buf]
-      if state and state.map_bufnr and vim.api.nvim_buf_is_valid(state.map_bufnr) then
-        local map_win = vim.fn.bufwinid(state.map_bufnr)
-        if map_win ~= -1 then
-          vim.api.nvim_win_close(map_win, true)
-        end
-      end
+      M.close_preview(src_buf)
     end
   end)
   is_handling_autocmd = false
