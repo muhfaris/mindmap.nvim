@@ -62,6 +62,13 @@ vim.api.nvim_create_autocmd("FileType", {
             require("mindmap").handle_markdown_autocmds()
           end,
         })
+        vim.api.nvim_create_autocmd({ "BufWinLeave", "BufWipeout" }, {
+          group = preview_group,
+          buffer = ev.buf,
+          callback = function()
+            require("mindmap").close_preview(ev.buf)
+          end,
+        })
       end
     end
   end,
